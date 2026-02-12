@@ -58,6 +58,14 @@ Example:
 curl "http://localhost:3000/v2/partner/orders?startDate=2026-02-01T00:00:00.000Z&endDate=2026-02-13T23:59:59.999Z"
 ```
 
+### Product Mappings (v2)
+
+- `GET /v2/products`
+
+### Regions (v2)
+
+- `GET /v2/regions`
+
 ## Scripts
 
 - `npm run dev` - run in watch mode
