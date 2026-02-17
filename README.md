@@ -14,8 +14,8 @@ TypeScript backend API with Express and DynamoDB.
 - `src/app.ts` - Express app setup
 - `src/server.ts` - local server entrypoint
 - `src/lambda.ts` - Lambda handler entrypoint
-- `src/routes/v2/partnerOrders.ts` - v2 route
-- `src/controllers/v2/partnerOrdersController.ts` - controller layer
+- `src/routes/v2/orders.ts` - v2 route
+- `src/controllers/v2/ordersController.ts` - controller layer
 - `src/services/orderService.ts` - DynamoDB access layer
 
 ## Environment Variables
@@ -56,6 +56,22 @@ Example:
 
 ```bash
 curl "http://localhost:3000/v2/partner/orders?startDate=2026-02-01T00:00:00.000Z&endDate=2026-02-13T23:59:59.999Z"
+```
+
+### In Progress Orders (v2)
+
+- `GET /v2/orders/in-progress?startDate=<ISO_DATE>&endDate=<ISO_DATE>`
+
+In Progress order criteria:
+
+- `status` is NOT `PAYMENT_EXPIRED`
+- `status` is NOT `TOP_UP_COMPLETED`
+- `status` is NOT `ESIM_PUBLISHED`
+
+Example:
+
+```bash
+curl "http://localhost:3000/v2/orders/in-progress?startDate=2026-02-01T00:00:00.000Z&endDate=2026-02-13T23:59:59.999Z"
 ```
 
 ### Product Mappings (v2)
