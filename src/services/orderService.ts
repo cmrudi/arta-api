@@ -1,4 +1,4 @@
-import { ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 
 import { dynamoDocClient } from '../lib/dynamo';
 import { OrderItem } from '../models/order';
@@ -7,9 +7,8 @@ const ORDERS_TABLE_NAME = 'Order';
 const ORDER_DATE_ATTRIBUTE = 'createdAt';
 const PARTNER_ATTRIBUTE = 'partner';
 const ORDER_STATUS_ATTRIBUTE = 'status';
-const ORDER_STATUS_PAYMENT_EXPIRED = 'PAYMENT_EXPIRED';
-const ORDER_STATUS_TOP_UP_COMPLETED = 'TOP_UP_COMPLETED';
-const ORDER_STATUS_ESIM_PUBLISHED = 'ESIM_PUBLISHED';
+const ORDER_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
+const IN_PROGRESS_STATUSES = ['CREATED', 'PAID', 'ESIM_ORDERED', 'ESIM_FULFILLED'];
 
 type FindOrdersResult = {
   tableName: string;
@@ -48,28 +47,39 @@ export const findInProgressOrdersByDateRange = async (
   startDate: string,
   endDate: string,
 ): Promise<FindOrdersResult> => {
-  const command = new ScanCommand({
-    TableName: ORDERS_TABLE_NAME,
-    FilterExpression:
-      '#orderDate BETWEEN :startDate AND :endDate AND (attribute_not_exists(#status) OR (#status <> :paymentExpired AND #status <> :topUpCompleted AND #status <> :esimPublished))',
-    ExpressionAttributeNames: {
-      '#orderDate': ORDER_DATE_ATTRIBUTE,
-      '#status': ORDER_STATUS_ATTRIBUTE,
-    },
-    ExpressionAttributeValues: {
-      ':startDate': startDate,
-      ':endDate': endDate,
-      ':paymentExpired': ORDER_STATUS_PAYMENT_EXPIRED,
-      ':topUpCompleted': ORDER_STATUS_TOP_UP_COMPLETED,
-      ':esimPublished': ORDER_STATUS_ESIM_PUBLISHED,
-    },
-  });
+  const items: OrderItem[] = [];
 
-  const result = await dynamoDocClient.send(command);
+  for (const status of IN_PROGRESS_STATUSES) {
+    let lastEvaluatedKey: Record<string, unknown> | undefined;
+
+    do {
+      const result = await dynamoDocClient.send(
+        new QueryCommand({
+          TableName: ORDERS_TABLE_NAME,
+          IndexName: ORDER_STATUS_CREATED_AT_INDEX,
+          KeyConditionExpression:
+            '#status = :status AND #createdAt BETWEEN :startDate AND :endDate',
+          ExpressionAttributeNames: {
+            '#status': ORDER_STATUS_ATTRIBUTE,
+            '#createdAt': ORDER_DATE_ATTRIBUTE,
+          },
+          ExpressionAttributeValues: {
+            ':status': status,
+            ':startDate': startDate,
+            ':endDate': endDate,
+          },
+          ExclusiveStartKey: lastEvaluatedKey,
+        }),
+      );
+
+      items.push(...((result.Items || []) as OrderItem[]));
+      lastEvaluatedKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (lastEvaluatedKey);
+  }
 
   return {
     tableName: ORDERS_TABLE_NAME,
-    count: result.Count || 0,
-    items: (result.Items || []) as OrderItem[],
+    count: items.length,
+    items,
   };
 };
