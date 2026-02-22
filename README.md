@@ -74,6 +74,25 @@ Example:
 curl "http://localhost:3000/v2/orders/in-progress?startDate=2026-02-01T00:00:00.000Z&endDate=2026-02-13T23:59:59.999Z"
 ```
 
+### Force Refund (v2)
+
+- `POST /v2/refund/force`
+
+Request body:
+
+```json
+{
+	"orderId": "f2c6f049-000a-4a9b-be3d-362997446e5b",
+	"amount": 10000
+}
+```
+
+Rules:
+
+- `orderId` must exist in `Order` table
+- `amount` must be `<= order.price`
+- update sets `refund = amount` and `forceRefund = true`
+
 ### Product Mappings (v2)
 
 - `GET /v2/products`

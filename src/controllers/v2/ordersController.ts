@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 
 import {
+  forceRefundOrderById,
   findInProgressOrdersByDateRange,
   findPartnerOrdersByDateRange,
 } from '../../services/orderService';
@@ -97,6 +98,62 @@ export const getInProgressOrders = async (req: Request, res: Response): Promise<
     return res.status(500).json({
       success: false,
       message: 'failed to read orders from DynamoDB',
+      error: error instanceof Error ? error.message : 'unknown error',
+    });
+  }
+};
+
+export const forceRefundOrder = async (req: Request, res: Response): Promise<Response> => {
+  const orderId = req.body?.orderId;
+  const amount = req.body?.amount;
+
+  if (typeof orderId !== 'string' || !orderId.trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'request body orderId is required',
+    });
+  }
+
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'request body amount must be a number greater than 0',
+    });
+  }
+
+  try {
+    const result = await forceRefundOrderById(orderId, amount);
+
+    if (!result.success) {
+      if (result.reason === 'ORDER_NOT_FOUND') {
+        return res.status(404).json({
+          success: false,
+          message: 'orderId not found in Order table',
+        });
+      }
+
+      if (result.reason === 'AMOUNT_EXCEEDS_PRICE') {
+        return res.status(400).json({
+          success: false,
+          message: 'amount should be less than or equal to order.price',
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: 'order price is invalid',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      tableName: 'Order',
+      item: result.item,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'failed to force refund order in DynamoDB',
       error: error instanceof Error ? error.message : 'unknown error',
     });
   }

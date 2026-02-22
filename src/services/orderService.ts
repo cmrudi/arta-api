@@ -1,4 +1,4 @@
-import { QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 
 import { dynamoDocClient } from '../lib/dynamo';
 import { OrderItem } from '../models/order';
@@ -15,6 +15,23 @@ type FindOrdersResult = {
   count: number;
   items: OrderItem[];
 };
+
+type ForceRefundSuccessResult = {
+  success: true;
+  item: OrderItem;
+};
+
+type ForceRefundErrorResult = {
+  success: false;
+  reason: 'ORDER_NOT_FOUND' | 'ORDER_PRICE_INVALID' | 'AMOUNT_EXCEEDS_PRICE';
+};
+
+export type ForceRefundResult = ForceRefundSuccessResult | ForceRefundErrorResult;
+
+const ORDER_ID_ATTRIBUTE = 'orderId';
+const ORDER_PRICE_ATTRIBUTE = 'price';
+const ORDER_REFUND_ATTRIBUTE = 'refund';
+const ORDER_FORCE_REFUND_ATTRIBUTE = 'forceRefund';
 
 export const findPartnerOrdersByDateRange = async (
   startDate: string,
@@ -81,5 +98,68 @@ export const findInProgressOrdersByDateRange = async (
     tableName: ORDERS_TABLE_NAME,
     count: items.length,
     items,
+  };
+};
+
+export const forceRefundOrderById = async (
+  orderId: string,
+  amount: number,
+): Promise<ForceRefundResult> => {
+  const getResult = await dynamoDocClient.send(
+    new GetCommand({
+      TableName: ORDERS_TABLE_NAME,
+      Key: {
+        [ORDER_ID_ATTRIBUTE]: orderId,
+      },
+    }),
+  );
+
+  if (!getResult.Item) {
+    return {
+      success: false,
+      reason: 'ORDER_NOT_FOUND',
+    };
+  }
+
+  const orderPriceRaw = (getResult.Item as Record<string, unknown>)[ORDER_PRICE_ATTRIBUTE];
+  const orderPrice =
+    typeof orderPriceRaw === 'number' ? orderPriceRaw : Number(String(orderPriceRaw));
+
+  if (Number.isNaN(orderPrice)) {
+    return {
+      success: false,
+      reason: 'ORDER_PRICE_INVALID',
+    };
+  }
+
+  if (amount > orderPrice) {
+    return {
+      success: false,
+      reason: 'AMOUNT_EXCEEDS_PRICE',
+    };
+  }
+
+  const updateResult = await dynamoDocClient.send(
+    new UpdateCommand({
+      TableName: ORDERS_TABLE_NAME,
+      Key: {
+        [ORDER_ID_ATTRIBUTE]: orderId,
+      },
+      UpdateExpression: 'SET #refund = :refund, #forceRefund = :forceRefund',
+      ExpressionAttributeNames: {
+        '#refund': ORDER_REFUND_ATTRIBUTE,
+        '#forceRefund': ORDER_FORCE_REFUND_ATTRIBUTE,
+      },
+      ExpressionAttributeValues: {
+        ':refund': amount,
+        ':forceRefund': true,
+      },
+      ReturnValues: 'ALL_NEW',
+    }),
+  );
+
+  return {
+    success: true,
+    item: (updateResult.Attributes || {}) as OrderItem,
   };
 };
