@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.758.0",
+    "@aws-sdk/client-lambda": "^3.995.0",
     "@aws-sdk/lib-dynamodb": "^3.758.0",
     "@vendia/serverless-express": "^4.12.6",
     "cors": "^2.8.5",

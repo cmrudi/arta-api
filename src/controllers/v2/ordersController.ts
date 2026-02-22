@@ -4,6 +4,7 @@ import {
   forceRefundOrderById,
   findInProgressOrdersByDateRange,
   findPartnerOrdersByDateRange,
+  recoverOrderById,
 } from '../../services/orderService';
 
 const isValidDateString = (value: string): boolean => {
@@ -154,6 +155,65 @@ export const forceRefundOrder = async (req: Request, res: Response): Promise<Res
     return res.status(500).json({
       success: false,
       message: 'failed to force refund order in DynamoDB',
+      error: error instanceof Error ? error.message : 'unknown error',
+    });
+  }
+};
+
+export const recoverOrder = async (req: Request, res: Response): Promise<Response> => {
+  const orderId = req.body?.orderId;
+
+  if (typeof orderId !== 'string' || !orderId.trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'request body orderId is required',
+    });
+  }
+
+  try {
+    const result = await recoverOrderById(orderId);
+
+    if (!result.success) {
+      if (result.reason === 'ORDER_NOT_FOUND') {
+        return res.status(404).json({
+          success: false,
+          message: 'orderId not found in Order table',
+        });
+      }
+
+      if (result.reason === 'STATUS_NOT_CREATED') {
+        return res.status(400).json({
+          success: false,
+          message: 'order recovery only supports order with status CREATED',
+        });
+      }
+
+      if (result.reason === 'PRODUCT_NOT_FOUND') {
+        return res.status(404).json({
+          success: false,
+          message: 'product mapping not found for this order',
+        });
+      }
+
+      return res.status(502).json({
+        success: false,
+        message: 'failed to read transaction status from Midtrans',
+        error: result.message,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      tableName: 'Order',
+      action: result.action,
+      invokedFunctionName: result.invokedFunctionName,
+      midtrans: result.midtrans,
+      item: result.order,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'failed to recover order',
       error: error instanceof Error ? error.message : 'unknown error',
     });
   }

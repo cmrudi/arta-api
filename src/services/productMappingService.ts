@@ -1,6 +1,4 @@
-import { ScanCommand } from '@aws-sdk/lib-dynamodb';
-
-import { dynamoDocClient } from '../lib/dynamo';
+import { scanAllProductMappings } from '../lib/dynamoDb';
 import { ProductMappingItem } from '../models/productMapping';
 
 const PRODUCT_MAPPING_TABLE_NAME = 'ProductMapping';
@@ -22,11 +20,7 @@ const sanitizeProductMappingItem = (item: ProductMappingItem): ProductMappingIte
 };
 
 export const findProductMappings = async (): Promise<FindProductMappingsResult> => {
-  const command = new ScanCommand({
-    TableName: PRODUCT_MAPPING_TABLE_NAME,
-  });
-
-  const result = await dynamoDocClient.send(command);
+  const result = await scanAllProductMappings();
   const items = ((result.Items || []) as ProductMappingItem[]).map(sanitizeProductMappingItem);
 
   return {

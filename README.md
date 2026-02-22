@@ -29,6 +29,8 @@ ORDERS_TABLE_NAME=Order
 ORDER_DATE_ATTRIBUTE=createdAt
 AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
+MIDTRANS_STATUS_BASE_URL=https://api.midtrans.com/v2
+MIDTRANS_AUTHORIZATION=Basic TWlkLXNlcnZlci02MzhUb3NIcFVHY2ticldSeFdGcS1RcWU6
 ```
 
 ## Run Locally
@@ -92,6 +94,26 @@ Rules:
 - `orderId` must exist in `Order` table
 - `amount` must be `<= order.price`
 - update sets `refund = amount` and `forceRefund = true`
+
+### Order Recovery (v2)
+
+- `POST /v2/order/recovery`
+
+Request body:
+
+```json
+{
+	"orderId": "1cb368c3-c8e7-4440-9c3b-e2f2fc3ba5d2"
+}
+```
+
+Rules:
+
+- only process order with `status = CREATED`
+- call Midtrans status API for the `orderId`
+- when `transaction_status = settlement`:
+	- update Order status to `PAID`
+	- invoke one Lambda asynchronously based on order type + provider
 
 ### Product Mappings (v2)
 
