@@ -15,6 +15,7 @@ const IN_PROGRESS_STATUSES = ['CREATED', 'PAID', 'ESIM_ORDERED', 'ESIM_FULFILLED
 const ORDER_TYPE_ATTRIBUTE = 'orderType';
 const ORDER_STATUS_CREATED = 'CREATED';
 const ORDER_STATUS_PAID = 'PAID';
+const ORDER_STATUS_PAYMENT_EXPIRED = 'PAYMENT_EXPIRED';
 const ESIM_ACCESS_PROVIDER = 'ESIM_ACCESS';
 
 type FindOrdersResult = {
@@ -39,7 +40,7 @@ type RecoverOrderSuccessResult = {
   success: true;
   order: OrderItem;
   midtrans: Record<string, unknown>;
-  action: 'NO_ACTION' | 'STATUS_UPDATED_AND_LAMBDA_INVOKED';
+  action: 'NO_ACTION' | 'STATUS_UPDATED' | 'STATUS_UPDATED_AND_LAMBDA_INVOKED';
   invokedFunctionName?: string;
 };
 
@@ -57,6 +58,13 @@ const ORDER_PRODUCT_CODE_ATTRIBUTE = 'productCode';
 const lambdaClient = new LambdaClient({});
 
 const normalizeString = (value: unknown): string => String(value || '').trim();
+
+const isMidtransTransactionNotFound = (payload: Record<string, unknown>): boolean => {
+  const statusCode = normalizeString(payload.status_code);
+  const statusMessage = normalizeString(payload.status_message).toLowerCase();
+
+  return statusCode === '404' && statusMessage.includes("transaction doesn't exist");
+};
 
 const invokeLambdaAsyncByName = async (functionName: string, orderId: string): Promise<void> => {
   await lambdaClient.send(
@@ -112,6 +120,10 @@ const fetchMidtransTransactionStatus = async (orderId: string): Promise<Record<s
   }
 
   if (!response.ok) {
+    if (isMidtransTransactionNotFound(payload)) {
+      return payload;
+    }
+
     throw new Error(`midtrans request failed with status ${response.status}`);
   }
 
@@ -232,6 +244,28 @@ export const recoverOrderById = async (orderId: string): Promise<RecoverOrderRes
   }
 
   const transactionStatus = normalizeString(midtransResponse.transaction_status).toLowerCase();
+
+  if (isMidtransTransactionNotFound(midtransResponse)) {
+    const updateResult = await updateOrderStatus(orderId, ORDER_STATUS_PAYMENT_EXPIRED);
+
+    return {
+      success: true,
+      order: (updateResult.Attributes || {}) as OrderItem,
+      midtrans: midtransResponse,
+      action: 'STATUS_UPDATED',
+    };
+  }
+
+  if (transactionStatus === 'expired') {
+    const updateResult = await updateOrderStatus(orderId, ORDER_STATUS_PAYMENT_EXPIRED);
+
+    return {
+      success: true,
+      order: (updateResult.Attributes || {}) as OrderItem,
+      midtrans: midtransResponse,
+      action: 'STATUS_UPDATED',
+    };
+  }
 
   if (transactionStatus !== 'settlement') {
     return {
