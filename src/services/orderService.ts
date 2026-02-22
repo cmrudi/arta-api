@@ -256,7 +256,7 @@ export const recoverOrderById = async (orderId: string): Promise<RecoverOrderRes
     };
   }
 
-  if (transactionStatus === 'expired') {
+  if (transactionStatus === 'expire') {
     const updateResult = await updateOrderStatus(orderId, ORDER_STATUS_PAYMENT_EXPIRED);
 
     return {
