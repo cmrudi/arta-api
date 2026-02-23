@@ -97,8 +97,8 @@ export const validatePromoByProductCode = async (
     success: true,
     product,
     promo,
-    price,
-    priceCut,
-    finalPrice,
+    price: price * 1000,
+    priceCut: priceCut * 1000,
+    finalPrice: finalPrice * 1000,
   };
 };
