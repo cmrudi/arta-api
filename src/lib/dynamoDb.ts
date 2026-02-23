@@ -8,6 +8,7 @@ export const sendDynamoCommand = async <T>(command: unknown): Promise<T> =>
 const ORDERS_TABLE_NAME = 'Order';
 const PRODUCT_MAPPING_TABLE_NAME = 'ProductMapping';
 const REGION_TABLE_NAME = 'Region';
+const PROMO_CODE_TABLE_NAME = 'PromoCode';
 const ORDER_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
 
 export const scanPartnerOrdersByDateRange = async (
@@ -110,18 +111,18 @@ export const updateOrderStatus = async (
     }),
   );
 
-export const scanProductMappingByProductCode = async (
+export const findProductByProductCode = async (
   productCode: string,
 ): Promise<{ Items?: Record<string, unknown>[] }> =>
   sendDynamoCommand(
-    new ScanCommand({
+    new QueryCommand({
       TableName: PRODUCT_MAPPING_TABLE_NAME,
-      FilterExpression: '#productCode = :productCode',
+      KeyConditionExpression: '#code = :code',
       ExpressionAttributeNames: {
-        '#productCode': 'productCode',
+        '#code': 'code',
       },
       ExpressionAttributeValues: {
-        ':productCode': productCode,
+        ':code': productCode,
       },
       Limit: 1,
     }),
@@ -141,5 +142,17 @@ export const scanAllRegions = async (): Promise<{ Count?: number; Items?: Record
   sendDynamoCommand(
     new ScanCommand({
       TableName: REGION_TABLE_NAME,
+    }),
+  );
+
+export const getPromoCodeByCode = async (
+  code: string,
+): Promise<{ Item?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new GetCommand({
+      TableName: PROMO_CODE_TABLE_NAME,
+      Key: {
+        code,
+      },
     }),
   );

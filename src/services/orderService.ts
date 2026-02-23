@@ -1,10 +1,10 @@
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 
 import {
+  findProductByProductCode,
   getOrderById,
   queryOrdersByStatusAndDateRange,
   scanPartnerOrdersByDateRange,
-  scanProductMappingByProductCode,
   updateOrderForceRefund,
   updateOrderStatus,
 } from '../lib/dynamoDb';
@@ -77,7 +77,7 @@ const invokeLambdaAsyncByName = async (functionName: string, orderId: string): P
 };
 
 const readProviderByProductCode = async (productCode: string): Promise<string | null> => {
-  const result = await scanProductMappingByProductCode(productCode);
+  const result = await findProductByProductCode(productCode);
 
   const first = (result.Items || [])[0] as Record<string, unknown> | undefined;
 
