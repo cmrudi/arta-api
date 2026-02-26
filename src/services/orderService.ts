@@ -16,7 +16,7 @@ const ORDER_TYPE_ATTRIBUTE = 'orderType';
 const ORDER_STATUS_CREATED = 'CREATED';
 const ORDER_STATUS_PAID = 'PAID';
 const ORDER_STATUS_PAYMENT_EXPIRED = 'PAYMENT_EXPIRED';
-const ESIM_ACCESS_PROVIDER = 'ESIM_ACCESS';
+const ESIM_ACCESS_PROVIDER = 'esimaccess';
 
 type FindOrdersResult = {
   tableName: string;
