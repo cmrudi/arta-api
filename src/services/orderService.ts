@@ -224,10 +224,35 @@ export const recoverOrderById = async (orderId: string): Promise<RecoverOrderRes
   const order = getOrderResult.Item as Record<string, unknown>;
   const status = normalizeString(order[ORDER_STATUS_ATTRIBUTE]);
 
-  if (status !== ORDER_STATUS_CREATED) {
+  if (status !== ORDER_STATUS_CREATED && status !== ORDER_STATUS_PAID) {
     return {
       success: false,
       reason: 'STATUS_NOT_CREATED',
+    };
+  }
+
+  if (status === ORDER_STATUS_PAID) {
+    const productCode = normalizeString(order[ORDER_PRODUCT_CODE_ATTRIBUTE]);
+    const orderType = normalizeString(order[ORDER_TYPE_ATTRIBUTE]);
+
+    const provider = await readProviderByProductCode(productCode);
+
+    if (!provider) {
+      return {
+        success: false,
+        reason: 'PRODUCT_NOT_FOUND',
+      };
+    }
+
+    const functionName = selectRecoveryLambdaName(orderType, provider);
+    await invokeLambdaAsyncByName(functionName, orderId);
+
+    return {
+      success: true,
+      order: order as OrderItem,
+      midtrans: {},
+      action: 'STATUS_UPDATED_AND_LAMBDA_INVOKED',
+      invokedFunctionName: functionName,
     };
   }
 
