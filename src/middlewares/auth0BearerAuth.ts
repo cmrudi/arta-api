@@ -1,6 +1,15 @@
 import { NextFunction, Request, Response } from 'express';
+import jwt, {
+  Algorithm,
+  JwtHeader,
+  JwtPayload,
+  SigningKeyCallback,
+  VerifyErrors,
+  VerifyOptions,
+} from 'jsonwebtoken';
+import jwksClient, { JwksClient } from 'jwks-rsa';
 
-const AUTH0_MIDDLEWARE_VERSION = '2026-03-04-1';
+const AUTH0_MIDDLEWARE_VERSION = '2026-03-04-2';
 const isAuth0DebugEnabled = (): boolean => process.env.AUTH0_DEBUG === 'true';
 
 export type AuthenticatedLocals = {
@@ -31,31 +40,8 @@ export const getAuth0ClientId = (payload?: Record<string, unknown>): string | un
   return undefined;
 };
 
-type JoseModule = {
-  createRemoteJWKSet: (url: URL) => unknown;
-  jwtVerify: (
-    token: string,
-    key: unknown,
-    options: { issuer: string; audience?: string },
-  ) => Promise<{ payload: Record<string, unknown> }>;
-};
-
 let cachedIssuer = '';
-let cachedJwks: unknown;
-let cachedJoseModule: JoseModule | undefined;
-
-const loadJose = async (): Promise<JoseModule> => {
-  if (!cachedJoseModule) {
-    const dynamicImport = ((modulePath: string) =>
-      (0, eval)(`import(${JSON.stringify(modulePath)})`)) as (
-      modulePath: string,
-    ) => Promise<unknown>;
-
-    cachedJoseModule = (await dynamicImport('jose')) as JoseModule;
-  }
-
-  return cachedJoseModule;
-};
+let cachedJwksClient: JwksClient | undefined;
 
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
 
@@ -75,15 +61,65 @@ const resolveIssuer = (): string | undefined => {
   return `https://${normalizedDomain}/`;
 };
 
-const getJwks = async (issuer: string): Promise<unknown> => {
-  const jose = await loadJose();
-
-  if (!cachedJwks || cachedIssuer !== issuer) {
+const getJwksClient = (issuer: string): JwksClient => {
+  if (!cachedJwksClient || cachedIssuer !== issuer) {
     cachedIssuer = issuer;
-    cachedJwks = jose.createRemoteJWKSet(new URL(`${issuer}.well-known/jwks.json`));
+    cachedJwksClient = jwksClient({
+      jwksUri: `${issuer}.well-known/jwks.json`,
+      cache: true,
+      cacheMaxEntries: 5,
+      cacheMaxAge: 10 * 60 * 1000,
+    });
   }
 
-  return cachedJwks;
+  return cachedJwksClient;
+};
+
+const verifyAuth0Token = async (
+  token: string,
+  issuer: string,
+  audience?: string,
+): Promise<Record<string, unknown>> => {
+  const client = getJwksClient(issuer);
+
+  const getKey = (header: JwtHeader, callback: SigningKeyCallback): void => {
+    if (!header.kid) {
+      callback(new Error('missing kid in token header'));
+      return;
+    }
+
+    client.getSigningKey(header.kid, (error, key) => {
+      if (error || !key) {
+        callback(error || new Error('unable to resolve signing key'));
+        return;
+      }
+
+      const signingKey = key.getPublicKey();
+      callback(null, signingKey);
+    });
+  };
+
+  const verifyOptions: VerifyOptions = {
+    algorithms: ['RS256'] as Algorithm[],
+    issuer,
+    ...(audience ? { audience } : {}),
+  };
+
+  return new Promise((resolve, reject) => {
+    jwt.verify(token, getKey, verifyOptions, (error: VerifyErrors | null, decoded?: JwtPayload | string) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      if (!decoded || typeof decoded === 'string') {
+        reject(new Error('invalid JWT payload'));
+        return;
+      }
+
+      resolve(decoded as Record<string, unknown>);
+    });
+  });
 };
 
 const extractBearerToken = (authorizationHeader?: string): string | undefined => {
@@ -159,22 +195,8 @@ export const requireAuth0Bearer = async (
   }
 
   try {
-    const jose = await loadJose();
-    const jwks = await getJwks(issuer);
     const audience = process.env.AUTH0_AUDIENCE;
-
-    const { payload } = await jose.jwtVerify(
-      token,
-      jwks,
-      audience
-        ? {
-            issuer,
-            audience,
-          }
-        : {
-            issuer,
-          },
-    );
+    const payload = await verifyAuth0Token(token, issuer, audience);
 
     res.locals.auth = payload;
 
