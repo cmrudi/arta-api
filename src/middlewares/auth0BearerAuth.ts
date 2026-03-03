@@ -97,9 +97,17 @@ export const requireAuth0Bearer = async (
   res: Response<unknown, AuthenticatedLocals>,
   next: NextFunction,
 ): Promise<void | Response> => {
+  const requestPath = req.originalUrl || req.url;
   const token = extractBearerToken(req.header('authorization'));
 
   if (!token) {
+    // eslint-disable-next-line no-console
+    console.error('[auth0Bearer] missing bearer token', {
+      path: requestPath,
+      method: req.method,
+      hasAuthorizationHeader: Boolean(req.header('authorization')),
+    });
+
     return res.status(401).json({
       success: false,
       message: 'missing or invalid authorization bearer token',
@@ -109,6 +117,15 @@ export const requireAuth0Bearer = async (
   const issuer = resolveIssuer();
 
   if (!issuer) {
+    // eslint-disable-next-line no-console
+    console.error('[auth0Bearer] issuer not configured', {
+      path: requestPath,
+      method: req.method,
+      hasAuth0IssuerBaseUrl: Boolean(process.env.AUTH0_ISSUER_BASE_URL),
+      hasAuth0Issuer: Boolean(process.env.AUTH0_ISSUER),
+      hasAuth0Domain: Boolean(process.env.AUTH0_DOMAIN),
+    });
+
     return res.status(500).json({
       success: false,
       message: 'auth0 issuer is not configured',
@@ -136,7 +153,20 @@ export const requireAuth0Bearer = async (
     res.locals.auth = payload;
 
     next();
-  } catch (_error) {
+  } catch (error) {
+    const errorName = error instanceof Error ? error.name : 'UnknownError';
+    const errorMessage = error instanceof Error ? error.message : 'unknown error';
+
+    // eslint-disable-next-line no-console
+    console.error('[auth0Bearer] token verification failed', {
+      path: requestPath,
+      method: req.method,
+      issuer,
+      audience: process.env.AUTH0_AUDIENCE || '(not set)',
+      errorName,
+      errorMessage,
+    });
+
     return res.status(401).json({
       success: false,
       message: 'invalid or expired access token',
