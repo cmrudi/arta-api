@@ -1,5 +1,8 @@
 import { NextFunction, Request, Response } from 'express';
 
+const AUTH0_MIDDLEWARE_VERSION = '2026-03-04-1';
+const isAuth0DebugEnabled = (): boolean => process.env.AUTH0_DEBUG === 'true';
+
 export type AuthenticatedLocals = {
   auth?: Record<string, unknown>;
 };
@@ -97,6 +100,8 @@ export const requireAuth0Bearer = async (
   res: Response<unknown, AuthenticatedLocals>,
   next: NextFunction,
 ): Promise<void | Response> => {
+  res.setHeader('x-auth0-middleware-version', AUTH0_MIDDLEWARE_VERSION);
+
   const requestPath = req.originalUrl || req.url;
   const token = extractBearerToken(req.header('authorization'));
 
@@ -111,6 +116,14 @@ export const requireAuth0Bearer = async (
     return res.status(401).json({
       success: false,
       message: 'missing or invalid authorization bearer token',
+      ...(isAuth0DebugEnabled()
+        ? {
+            debug: {
+              reason: 'MISSING_OR_INVALID_BEARER_TOKEN',
+              middlewareVersion: AUTH0_MIDDLEWARE_VERSION,
+            },
+          }
+        : {}),
     });
   }
 
@@ -129,6 +142,14 @@ export const requireAuth0Bearer = async (
     return res.status(500).json({
       success: false,
       message: 'auth0 issuer is not configured',
+      ...(isAuth0DebugEnabled()
+        ? {
+            debug: {
+              reason: 'ISSUER_NOT_CONFIGURED',
+              middlewareVersion: AUTH0_MIDDLEWARE_VERSION,
+            },
+          }
+        : {}),
     });
   }
 
@@ -170,6 +191,18 @@ export const requireAuth0Bearer = async (
     return res.status(401).json({
       success: false,
       message: 'invalid or expired access token',
+      ...(isAuth0DebugEnabled()
+        ? {
+            debug: {
+              reason: 'JWT_VERIFY_FAILED',
+              errorName,
+              errorMessage,
+              issuer,
+              audience: process.env.AUTH0_AUDIENCE || '(not set)',
+              middlewareVersion: AUTH0_MIDDLEWARE_VERSION,
+            },
+          }
+        : {}),
     });
   }
 };
