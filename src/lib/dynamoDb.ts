@@ -9,6 +9,7 @@ const ORDERS_TABLE_NAME = 'Order';
 const PRODUCT_MAPPING_TABLE_NAME = 'ProductMapping';
 const REGION_TABLE_NAME = 'Region';
 const PROMO_CODE_TABLE_NAME = 'PromoCode';
+const DISTRIBUTOR_WALLET_TABLE_NAME = 'DistributorWallet';
 const ORDER_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
 
 export const scanPartnerOrdersByDateRange = async (
@@ -154,5 +155,22 @@ export const getPromoCodeByCode = async (
       Key: {
         code,
       },
+    }),
+  );
+
+export const getDistributorWalletByClientId = async (
+  distributorId: string,
+): Promise<{ Items?: Record<string, unknown>[] }> =>
+  sendDynamoCommand(
+    new QueryCommand({
+      TableName: DISTRIBUTOR_WALLET_TABLE_NAME,
+      KeyConditionExpression: '#distributorId = :distributorId',
+      ExpressionAttributeNames: {
+        '#distributorId': 'distributorId',
+      },
+      ExpressionAttributeValues: {
+        ':distributorId': distributorId,
+      },
+      Limit: 1,
     }),
   );

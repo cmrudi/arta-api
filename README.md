@@ -31,6 +31,9 @@ AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
 MIDTRANS_STATUS_BASE_URL=https://api.midtrans.com/v2
 MIDTRANS_AUTHORIZATION=Basic TWlkLXNlcnZlci02MzhUb3NIcFVHY2ticldSeFdGcS1RcWU6
+AUTH0_DOMAIN=
+AUTH0_ISSUER_BASE_URL=
+AUTH0_AUDIENCE=
 ```
 
 ## Run Locally
@@ -122,6 +125,18 @@ Rules:
 ### Regions (v2)
 
 - `GET /v2/regions`
+
+### Distributor Wallet Balance (v2)
+
+- `GET /v2/dist/wallet/balance`
+- Requires header: `Authorization: Bearer <access_token>`
+
+Example:
+
+```bash
+curl --request GET 'http://localhost:3000/v2/dist/wallet/balance' \
+	--header 'authorization: Bearer <Your Access Token>'
+```
 
 ## Scripts
 
