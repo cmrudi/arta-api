@@ -1,4 +1,4 @@
-import { GetCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 
 import { dynamoDocClient } from './dynamo';
 
@@ -172,5 +172,15 @@ export const getDistributorWalletByClientId = async (
         ':distributorId': distributorId,
       },
       Limit: 1,
+    }),
+  );
+
+export const createOrder = async (
+  order: Record<string, unknown>,
+): Promise<Record<string, unknown>> =>
+  sendDynamoCommand(
+    new PutCommand({
+      TableName: ORDERS_TABLE_NAME,
+      Item: order,
     }),
   );

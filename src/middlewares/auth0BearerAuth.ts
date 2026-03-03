@@ -1,11 +1,10 @@
 import { NextFunction, Request, Response } from 'express';
-import { createRemoteJWKSet, JWTPayload, jwtVerify } from 'jose';
 
 export type AuthenticatedLocals = {
-  auth?: JWTPayload;
+  auth?: Record<string, unknown>;
 };
 
-export const getAuth0ClientId = (payload?: JWTPayload): string | undefined => {
+export const getAuth0ClientId = (payload?: Record<string, unknown>): string | undefined => {
   if (!payload) {
     return undefined;
   }
@@ -29,8 +28,26 @@ export const getAuth0ClientId = (payload?: JWTPayload): string | undefined => {
   return undefined;
 };
 
+type JoseModule = {
+  createRemoteJWKSet: (url: URL) => unknown;
+  jwtVerify: (
+    token: string,
+    key: unknown,
+    options: { issuer: string; audience?: string },
+  ) => Promise<{ payload: Record<string, unknown> }>;
+};
+
 let cachedIssuer = '';
-let cachedJwks: ReturnType<typeof createRemoteJWKSet> | undefined;
+let cachedJwks: unknown;
+let cachedJoseModule: JoseModule | undefined;
+
+const loadJose = async (): Promise<JoseModule> => {
+  if (!cachedJoseModule) {
+    cachedJoseModule = (await import('jose')) as unknown as JoseModule;
+  }
+
+  return cachedJoseModule;
+};
 
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
 
@@ -50,10 +67,12 @@ const resolveIssuer = (): string | undefined => {
   return `https://${normalizedDomain}/`;
 };
 
-const getJwks = (issuer: string): ReturnType<typeof createRemoteJWKSet> => {
+const getJwks = async (issuer: string): Promise<unknown> => {
+  const jose = await loadJose();
+
   if (!cachedJwks || cachedIssuer !== issuer) {
     cachedIssuer = issuer;
-    cachedJwks = createRemoteJWKSet(new URL(`${issuer}.well-known/jwks.json`));
+    cachedJwks = jose.createRemoteJWKSet(new URL(`${issuer}.well-known/jwks.json`));
   }
 
   return cachedJwks;
@@ -97,10 +116,11 @@ export const requireAuth0Bearer = async (
   }
 
   try {
-    const jwks = getJwks(issuer);
+    const jose = await loadJose();
+    const jwks = await getJwks(issuer);
     const audience = process.env.AUTH0_AUDIENCE;
 
-    const { payload } = await jwtVerify(
+    const { payload } = await jose.jwtVerify(
       token,
       jwks,
       audience
