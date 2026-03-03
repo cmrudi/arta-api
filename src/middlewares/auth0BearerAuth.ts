@@ -46,7 +46,11 @@ let cachedJoseModule: JoseModule | undefined;
 
 const loadJose = async (): Promise<JoseModule> => {
   if (!cachedJoseModule) {
-    cachedJoseModule = (await import('jose')) as unknown as JoseModule;
+    const dynamicImport = new Function('modulePath', 'return import(modulePath)') as (
+      modulePath: string,
+    ) => Promise<unknown>;
+
+    cachedJoseModule = (await dynamicImport('jose')) as JoseModule;
   }
 
   return cachedJoseModule;
