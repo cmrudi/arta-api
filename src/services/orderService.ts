@@ -15,8 +15,11 @@ const IN_PROGRESS_STATUSES = ['CREATED', 'PAID', 'ESIM_ORDERED', 'ESIM_FULFILLED
 const ORDER_TYPE_ATTRIBUTE = 'orderType';
 const ORDER_STATUS_CREATED = 'CREATED';
 const ORDER_STATUS_PAID = 'PAID';
+const ORDER_STATUS_ESIM_ORDERED = 'ESIM_ORDERED';
+const ORDER_STATUS_ORDER_FULFILLED = 'ORDER_FULFILLED';
 const ORDER_STATUS_PAYMENT_EXPIRED = 'PAYMENT_EXPIRED';
 const ESIM_ACCESS_PROVIDER = 'ESIMACCESS';
+const ORDER_PROVIDER_ORDER_NO_ATTRIBUTE = 'providerOrderNo';
 
 type FindOrdersResult = {
   tableName: string;
@@ -46,7 +49,13 @@ type RecoverOrderSuccessResult = {
 
 type RecoverOrderErrorResult = {
   success: false;
-  reason: 'ORDER_NOT_FOUND' | 'STATUS_NOT_CREATED' | 'PRODUCT_NOT_FOUND' | 'MIDTRANS_FAILED';
+  reason:
+    | 'ORDER_NOT_FOUND'
+    | 'STATUS_NOT_CREATED'
+    | 'PRODUCT_NOT_FOUND'
+    | 'MIDTRANS_FAILED'
+    | 'PROVIDER_ORDER_NO_NOT_FOUND'
+    | 'ESIMACCESS_QUERY_FAILED';
   message?: string;
 };
 
@@ -125,6 +134,44 @@ const fetchMidtransTransactionStatus = async (orderId: string): Promise<Record<s
     }
 
     throw new Error(`midtrans request failed with status ${response.status}`);
+  }
+
+  return payload;
+};
+
+const queryEsimAccessByOrderNo = async (orderNo: string): Promise<Record<string, unknown>> => {
+  const esimAccessBaseUrl = process.env.ESIM_ACCESS_BASE_URL || 'https://api.esimaccess.com';
+  const esimAccessCode = process.env.ESIM_ACCESS_CODE || '';
+
+  if (!esimAccessCode) {
+    throw new Error('ESIM_ACCESS_CODE is not configured');
+  }
+
+  const response = await fetch(`${esimAccessBaseUrl}/api/v1/open/esim/query`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'RT-AccessCode': esimAccessCode,
+    },
+    body: JSON.stringify({
+      orderNo,
+      pager: {
+        pageNum: 1,
+        pageSize: 50,
+      },
+    }),
+  });
+
+  let payload: Record<string, unknown> = {};
+
+  try {
+    payload = (await response.json()) as Record<string, unknown>;
+  } catch {
+    payload = {};
+  }
+
+  if (!response.ok) {
+    throw new Error(`esimAccess query failed with status ${response.status}`);
   }
 
   return payload;
@@ -224,7 +271,11 @@ export const recoverOrderById = async (orderId: string): Promise<RecoverOrderRes
   const order = getOrderResult.Item as Record<string, unknown>;
   const status = normalizeString(order[ORDER_STATUS_ATTRIBUTE]);
 
-  if (status !== ORDER_STATUS_CREATED && status !== ORDER_STATUS_PAID) {
+  if (
+    status !== ORDER_STATUS_CREATED
+    && status !== ORDER_STATUS_PAID
+    && status !== ORDER_STATUS_ESIM_ORDERED
+  ) {
     return {
       success: false,
       reason: 'STATUS_NOT_CREATED',
@@ -253,6 +304,65 @@ export const recoverOrderById = async (orderId: string): Promise<RecoverOrderRes
       midtrans: {},
       action: 'STATUS_UPDATED_AND_LAMBDA_INVOKED',
       invokedFunctionName: functionName,
+    };
+  }
+
+  if (status === ORDER_STATUS_ESIM_ORDERED) {
+    const providerOrderNo = normalizeString(order[ORDER_PROVIDER_ORDER_NO_ATTRIBUTE]);
+
+    if (!providerOrderNo) {
+      return {
+        success: false,
+        reason: 'PROVIDER_ORDER_NO_NOT_FOUND',
+      };
+    }
+
+    let esimAccessResponse: Record<string, unknown>;
+
+    try {
+      esimAccessResponse = await queryEsimAccessByOrderNo(providerOrderNo);
+    } catch (error) {
+      return {
+        success: false,
+        reason: 'ESIMACCESS_QUERY_FAILED',
+        message: error instanceof Error ? error.message : 'unknown error',
+      };
+    }
+
+    const success = esimAccessResponse.success === true;
+    const responseObj = esimAccessResponse.obj as Record<string, unknown> | undefined;
+    const esimList = Array.isArray(responseObj?.esimList) ? responseObj?.esimList : [];
+
+    if (success && esimList.length === 1) {
+      const updateResult = await updateOrderStatus(orderId, ORDER_STATUS_ORDER_FULFILLED);
+      await invokeLambdaAsyncByName('esimAccessEsimIssuance', orderId);
+
+      return {
+        success: true,
+        order: (updateResult.Attributes || {}) as OrderItem,
+        midtrans: esimAccessResponse,
+        action: 'STATUS_UPDATED_AND_LAMBDA_INVOKED',
+        invokedFunctionName: 'esimAccessEsimIssuance',
+      };
+    }
+
+    if (success && esimList.length === 0) {
+      await invokeLambdaAsyncByName('esimAccessCreateOrderProfile', orderId);
+
+      return {
+        success: true,
+        order: order as OrderItem,
+        midtrans: esimAccessResponse,
+        action: 'STATUS_UPDATED_AND_LAMBDA_INVOKED',
+        invokedFunctionName: 'esimAccessCreateOrderProfile',
+      };
+    }
+
+    return {
+      success: true,
+      order: order as OrderItem,
+      midtrans: esimAccessResponse,
+      action: 'NO_ACTION',
     };
   }
 

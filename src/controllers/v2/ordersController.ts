@@ -184,9 +184,24 @@ export const recoverOrder = async (req: Request, res: Response): Promise<Respons
       if (result.reason === 'STATUS_NOT_CREATED') {
         return res.status(400).json({
           success: false,
-          message: 'order recovery only supports order with status CREATED',
+            message: 'order recovery only supports order with status CREATED, PAID, or ESIM_ORDERED',
         });
       }
+
+        if (result.reason === 'PROVIDER_ORDER_NO_NOT_FOUND') {
+          return res.status(400).json({
+            success: false,
+            message: 'providerOrderNo is missing in order data',
+          });
+        }
+
+        if (result.reason === 'ESIMACCESS_QUERY_FAILED') {
+          return res.status(502).json({
+            success: false,
+            message: 'failed to query esimAccess by providerOrderNo',
+            error: result.message,
+          });
+        }
 
       if (result.reason === 'PRODUCT_NOT_FOUND') {
         return res.status(404).json({
