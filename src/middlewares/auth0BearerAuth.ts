@@ -1,15 +1,12 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt, {
   Algorithm,
-  JwtHeader,
   JwtPayload,
-  SigningKeyCallback,
   VerifyErrors,
   VerifyOptions,
 } from 'jsonwebtoken';
-import jwksClient, { JwksClient } from 'jwks-rsa';
 
-const AUTH0_MIDDLEWARE_VERSION = '2026-03-04-2';
+const AUTH0_MIDDLEWARE_VERSION = '2026-03-06-1';
 const isAuth0DebugEnabled = (): boolean => process.env.AUTH0_DEBUG === 'true';
 
 export type AuthenticatedLocals = {
@@ -41,7 +38,7 @@ export const getAuth0ClientId = (payload?: Record<string, unknown>): string | un
 };
 
 let cachedIssuer = '';
-let cachedJwksClient: JwksClient | undefined;
+let cachedJwksByKid: Map<string, string> | undefined;
 
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
 
@@ -61,18 +58,72 @@ const resolveIssuer = (): string | undefined => {
   return `https://${normalizedDomain}/`;
 };
 
-const getJwksClient = (issuer: string): JwksClient => {
-  if (!cachedJwksClient || cachedIssuer !== issuer) {
-    cachedIssuer = issuer;
-    cachedJwksClient = jwksClient({
-      jwksUri: `${issuer}.well-known/jwks.json`,
-      cache: true,
-      cacheMaxEntries: 5,
-      cacheMaxAge: 10 * 60 * 1000,
-    });
+const base64UrlDecode = (value: string): string => {
+  const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+
+  return Buffer.from(`${base64}${padding}`, 'base64').toString('utf-8');
+};
+
+const parseJwtHeader = (token: string): { kid?: string; alg?: string } => {
+  const [encodedHeader] = token.split('.');
+
+  if (!encodedHeader) {
+    return {};
   }
 
-  return cachedJwksClient;
+  try {
+    const parsed = JSON.parse(base64UrlDecode(encodedHeader)) as Record<string, unknown>;
+
+    return {
+      kid: typeof parsed.kid === 'string' ? parsed.kid : undefined,
+      alg: typeof parsed.alg === 'string' ? parsed.alg : undefined,
+    };
+  } catch {
+    return {};
+  }
+};
+
+const certToPem = (cert: string): string => {
+  const wrapped = cert.match(/.{1,64}/g)?.join('\n') || cert;
+
+  return `-----BEGIN CERTIFICATE-----\n${wrapped}\n-----END CERTIFICATE-----`;
+};
+
+const getJwksByKid = async (issuer: string): Promise<Map<string, string>> => {
+  if (cachedJwksByKid && cachedIssuer === issuer) {
+    return cachedJwksByKid;
+  }
+
+  const response = await fetch(`${issuer}.well-known/jwks.json`, {
+    method: 'GET',
+    headers: {
+      accept: 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`failed to fetch jwks: ${response.status}`);
+  }
+
+  const payload = (await response.json()) as {
+    keys?: Array<{ kid?: string; x5c?: string[] }>;
+  };
+
+  const keyMap = new Map<string, string>();
+
+  (payload.keys || []).forEach((key) => {
+    if (!key.kid || !Array.isArray(key.x5c) || key.x5c.length === 0) {
+      return;
+    }
+
+    keyMap.set(key.kid, certToPem(String(key.x5c[0])));
+  });
+
+  cachedIssuer = issuer;
+  cachedJwksByKid = keyMap;
+
+  return keyMap;
 };
 
 const verifyAuth0Token = async (
@@ -80,24 +131,18 @@ const verifyAuth0Token = async (
   issuer: string,
   audience?: string,
 ): Promise<Record<string, unknown>> => {
-  const client = getJwksClient(issuer);
+  const header = parseJwtHeader(token);
 
-  const getKey = (header: JwtHeader, callback: SigningKeyCallback): void => {
-    if (!header.kid) {
-      callback(new Error('missing kid in token header'));
-      return;
-    }
+  if (!header.kid) {
+    throw new Error('missing kid in token header');
+  }
 
-    client.getSigningKey(header.kid, (error, key) => {
-      if (error || !key) {
-        callback(error || new Error('unable to resolve signing key'));
-        return;
-      }
+  const jwksByKid = await getJwksByKid(issuer);
+  const signingKey = jwksByKid.get(header.kid);
 
-      const signingKey = key.getPublicKey();
-      callback(null, signingKey);
-    });
-  };
+  if (!signingKey) {
+    throw new Error('signing key not found for token kid');
+  }
 
   const verifyOptions: VerifyOptions = {
     algorithms: ['RS256'] as Algorithm[],
@@ -106,7 +151,7 @@ const verifyAuth0Token = async (
   };
 
   return new Promise((resolve, reject) => {
-    jwt.verify(token, getKey, verifyOptions, (error: VerifyErrors | null, decoded?: JwtPayload | string) => {
+    jwt.verify(token, signingKey, verifyOptions, (error: VerifyErrors | null, decoded?: JwtPayload | string) => {
       if (error) {
         reject(error);
         return;
