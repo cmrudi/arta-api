@@ -3,6 +3,7 @@ import { getDistributorWalletByClientId } from '../lib/dynamoDb';
 type FindDistributorWalletBalanceResult = {
   balance: number;
   distributorName: string;
+  email: string;
 };
 
 const parseBalance = (value: unknown): number => {
@@ -27,6 +28,14 @@ const parseDistributorName = (value: unknown): string => {
   return '';
 };
 
+const parseEmail = (value: unknown): string => {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+
+  return '';
+};
+
 export const findDistributorWalletBalance = async (
   clientId: string,
 ): Promise<FindDistributorWalletBalanceResult> => {
@@ -36,5 +45,6 @@ export const findDistributorWalletBalance = async (
   return {
     balance: parseBalance(walletItem?.balance),
     distributorName: parseDistributorName(walletItem?.distributorName),
+    email: parseEmail(walletItem?.email),
   };
 };
