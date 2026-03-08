@@ -100,6 +100,7 @@ export const createDistributorOrder = async (
     productCode: payload.productCode,
     price: wholesalePrice * 1000,
     paymentType: 'distributorWallet',
+    distributor: wallet.distributorName,
     orderType: 'esim',
     createdAt: new Date().toISOString(),
     status: 'PAID',

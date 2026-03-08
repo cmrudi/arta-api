@@ -48,6 +48,7 @@ export const getDistributorWalletBalance = async (
     return res.status(200).json({
       success: true,
       balance: result.balance,
+      distributorName: result.distributorName,
     });
   } catch (error) {
     return res.status(500).json({
