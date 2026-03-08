@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
 import {
+    createDistributorOauthToken,
 	createDistOrder,
 	getDistributorPackageList,
 	getDistributorWalletBalance,
@@ -11,6 +12,7 @@ const distributorRouter = Router();
 
 distributorRouter.get('/dist/package/list', getDistributorPackageList);
 distributorRouter.get('/dist/wallet/balance', requireAuth0Bearer, getDistributorWalletBalance);
+distributorRouter.post('/dist/oauth/token', createDistributorOauthToken);
 distributorRouter.post('/dist/create/order', requireAuth0Bearer, createDistOrder);
 
 export default distributorRouter;

@@ -34,6 +34,7 @@ MIDTRANS_AUTHORIZATION=Basic TWlkLXNlcnZlci02MzhUb3NIcFVHY2ticldSeFdGcS1RcWU6
 AUTH0_DOMAIN=
 AUTH0_ISSUER_BASE_URL=
 AUTH0_AUDIENCE=
+AUTH0_OAUTH_BASE_URL=https://artamobile.us.auth0.com
 ESIM_ACCESS_CODE=
 ESIM_ACCESS_BASE_URL=https://api.esimaccess.com
 ```
@@ -138,6 +139,19 @@ Example:
 ```bash
 curl --request GET 'http://localhost:3000/v2/dist/wallet/balance' \
 	--header 'authorization: Bearer <Your Access Token>'
+```
+
+### Distributor OAuth Token (v2)
+
+- `POST /v2/dist/oauth/token`
+
+Request body:
+
+```json
+{
+	"clientId": "udROWCnxvYWR5NIZI92cM95k5NI4fCPp",
+	"clientSecret": "LPnCzJzG-BwW4oHaxVggrpmbLG57R24XfRIxEWXDdDcDqQ7mutZM0aXIj179sztp"
+}
 ```
 
 ## Scripts

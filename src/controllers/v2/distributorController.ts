@@ -7,6 +7,7 @@ import {
 import {
   createDistributorOrder,
 } from '../../services/distributorOrderService';
+import { requestDistributorOauthToken } from '../../services/distributorOauthService';
 import { findDistributorPackageList } from '../../services/distributorService';
 import { findDistributorWalletBalance } from '../../services/distributorWalletService';
 
@@ -126,6 +127,43 @@ export const createDistOrder = async (
     return res.status(500).json({
       success: false,
       message: 'failed to create distributor order',
+      error: error instanceof Error ? error.message : 'unknown error',
+    });
+  }
+};
+
+export const createDistributorOauthToken = async (
+  req: Request,
+  res: Response,
+): Promise<Response> => {
+  const clientId = req.body?.clientId;
+  const clientSecret = req.body?.clientSecret;
+
+  if (typeof clientId !== 'string' || !clientId.trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'request body clientId is required',
+    });
+  }
+
+  if (typeof clientSecret !== 'string' || !clientSecret.trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'request body clientSecret is required',
+    });
+  }
+
+  try {
+    const result = await requestDistributorOauthToken({
+      clientId: clientId.trim(),
+      clientSecret: clientSecret.trim(),
+    });
+
+    return res.status(result.statusCode).json(result.payload);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'failed to request distributor oauth token',
       error: error instanceof Error ? error.message : 'unknown error',
     });
   }
