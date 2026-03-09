@@ -49,6 +49,7 @@ export const getDistributorWalletBalance = async (
       success: true,
       balance: result.balance,
       distributorName: result.distributorName,
+      distributorId: result.distributorId,
       email: result.email,
     });
   } catch (error) {
