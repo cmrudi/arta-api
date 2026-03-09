@@ -105,6 +105,7 @@ export const createDistributorOrder = async (
     createdAt: new Date().toISOString(),
     status: 'PAID',
   };
+  console.log('Creating distributor order with data:', order);
 
   await createOrder(order);
 
