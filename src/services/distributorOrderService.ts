@@ -96,7 +96,7 @@ export const createDistributorOrder = async (
   const order: OrderItem = {
     orderId: randomUUID(),
     transactionId: payload.transactionId,
-    email: '',
+    email: wallet.email,
     productCode: payload.productCode,
     price: wholesalePrice * 1000,
     paymentType: 'distributorWallet',
