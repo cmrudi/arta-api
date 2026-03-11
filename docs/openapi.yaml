@@ -108,6 +108,9 @@ paths:
       description: |-
         Client must pass the access token from the Request OAuth token API in the Authorization header.
         Use this format: `Authorization: Bearer <ACCESS_TOKEN>`.
+        
+        After SIM is successfully generated, Arta Mobile will send a callback payload to your callback endpoint.
+        See `POST /callback/sim-generated` below for the callback request body contract.
       operationId: createDistributorOrder
       security:
         - bearerAuth: []
@@ -189,6 +192,47 @@ paths:
                 message: product mapping not found
         '500':
           $ref: '#/components/responses/InternalServerError'
+
+  /callback/sim-generated:
+    post:
+      summary: SIM generated callback (client endpoint)
+      description: |-
+        This endpoint must be prepared by client side.
+        Arta Mobile server will call this endpoint once the SIM is successfully generated.
+      operationId: simGeneratedCallback
+      servers:
+        - url: https://your-domain.example.com
+          description: Client callback server
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimGeneratedCallbackRequest'
+            example:
+              SimId: 138b87d4-7325-4f79-9d3e-2d091da281b4
+              iccid: '2227645175410191967'
+              filename: https://artaqrcode.s3.ap-southeast-1.amazonaws.com/cutmeurahrudigmailcom9niNRCU1mCDNHINpsWgBEjRgbNPWtFsWtBtE2Nv9g6K0LNseFxgb15htuqyOjMC4cVQ8AdPGuiWQJ2gDX7NKa7M20cilZVf898RF.png
+              activationCode: LPA:1$rsp-eu.redteamobile.com$43DE23C67EE747BCAD6B63E8B67B261F
+              orderId: 491bb221-0b91-453f-92a8-7bd85efee690
+              region: id
+              createdAt: '2026-03-11T21:27:35.751Z'
+      responses:
+        '200':
+          description: Callback accepted by client endpoint
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+              example:
+                success: true
+        '400':
+          description: Invalid callback payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BasicError'
 
   /v2/dist/wallet/balance:
     get:
@@ -367,3 +411,33 @@ components:
             - XLSmart
             - Telkomsel
       additionalProperties: true
+
+    SimGeneratedCallbackRequest:
+      type: object
+      required:
+        - SimId
+        - iccid
+        - filename
+        - activationCode
+        - orderId
+        - region
+        - createdAt
+      properties:
+        SimId:
+          type: string
+          format: uuid
+        iccid:
+          type: string
+        filename:
+          type: string
+        activationCode:
+          type: string
+        orderId:
+          type: string
+          format: uuid
+        region:
+          type: string
+          example: id
+        createdAt:
+          type: string
+          format: date-time
