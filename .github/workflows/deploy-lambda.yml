@@ -42,7 +42,7 @@ jobs:
       - name: Create deployment package
         run: |
           mkdir -p artifacts
-          zip -r artifacts/lambda.zip dist node_modules package.json
+          zip -r artifacts/lambda.zip dist docs node_modules package.json
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4

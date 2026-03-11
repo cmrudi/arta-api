@@ -9,6 +9,7 @@ import v2Router from './routes/v2';
 dotenv.config();
 
 const app = express();
+const docsPath = path.resolve(process.cwd(), 'docs');
 
 app.use(
   helmet({
@@ -23,7 +24,10 @@ app.use(
 app.use(cors());
 app.use(express.json());
 app.use(morgan('dev'));
-app.use('/docs', express.static(path.resolve(process.cwd(), 'docs')));
+app.get('/docs', (_req, res) => {
+  res.sendFile(path.join(docsPath, 'index.html'));
+});
+app.use('/docs', express.static(docsPath));
 app.use('/v2', v2Router);
 
 app.get('/health', (_req, res) => {
