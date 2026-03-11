@@ -7,6 +7,32 @@ type FindDistributorPackageListResult = {
   items: ProductMappingItem[];
 };
 
+const parseNetworkProviderNames = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const names = value
+    .map((provider) => {
+      if (typeof provider === 'string') {
+        return provider.trim();
+      }
+
+      if (provider && typeof provider === 'object' && 'name' in provider) {
+        const providerName = (provider as { name?: unknown }).name;
+
+        if (typeof providerName === 'string') {
+          return providerName.trim();
+        }
+      }
+
+      return '';
+    })
+    .filter((name) => name.length > 0);
+
+  return names.length > 0 ? names : undefined;
+};
+
 export const findDistributorPackageList = async (): Promise<FindDistributorPackageListResult> => {
   const [productMappingResult, regionResult] = await Promise.all([
     findProductMappings(),
@@ -40,6 +66,13 @@ export const findDistributorPackageList = async (): Promise<FindDistributorPacka
     .filter((item) => item.wholesale === true)
     .map((item) => {
       const { wholesale, esimAccessTopupId, ...sanitized } = item;
+      const { code, productCode: existingProductCode, ...normalized } = sanitized;
+      const productCode =
+        typeof code === 'string' && code.trim()
+          ? code.trim()
+          : typeof existingProductCode === 'string' && existingProductCode.trim()
+            ? existingProductCode.trim()
+            : undefined;
       const regionCode = typeof sanitized.regionCode === 'string' ? sanitized.regionCode : undefined;
       const matchedRegion = regionCode ? regionsByCode.get(regionCode) : undefined;
 
@@ -47,9 +80,10 @@ export const findDistributorPackageList = async (): Promise<FindDistributorPacka
       void esimAccessTopupId;
 
       return {
-        ...sanitized,
+        ...(productCode ? { productCode } : {}),
+        ...normalized,
         regionName: matchedRegion?.regionName,
-        networkProvider: matchedRegion?.networkProvider,
+        networkProvider: parseNetworkProviderNames(matchedRegion?.networkProvider),
       };
     });
 

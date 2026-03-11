@@ -1,0 +1,369 @@
+openapi: 3.0.3
+info:
+  title: Arta API - Distributor Routes
+  version: 1.0.0
+  description: |-
+    Welcome to Arta Mobile Distributor Programme
+
+    Access our distributor OpenAPI routes to integrate efficiently, scale faster, and unlock new revenue opportunities with Arta Mobile.
+
+    Interested in becoming an official distributor?
+    Contact us via:
+
+    WhatsApp: https://wa.me/6281110112731
+
+    Email: gita@artamobile.com
+servers:
+  - url: https://api.artamobile.id
+    description: Production server
+
+paths:
+  /v2/dist/oauth/token:
+    post:
+      summary: Request OAuth token
+      description: Submit `clientId` and `clientSecret` in the request body to obtain an access token.
+      operationId: createDistributorOauthToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DistributorOauthTokenRequest'
+      responses:
+        '200':
+          description: OAuth token response from Auth0 (success shape may vary)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+              examples:
+                success:
+                  value:
+                    access_token: <token>
+                    expires_in: 86400
+                    token_type: Bearer
+        '400':
+          description: Missing required request field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BasicError'
+              examples:
+                missingClientId:
+                  value:
+                    success: false
+                    message: request body clientId is required
+                missingClientSecret:
+                  value:
+                    success: false
+                    message: request body clientSecret is required
+        '401':
+          description: OAuth provider rejected credentials
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '403':
+          description: OAuth provider rejected request
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /v2/dist/package/list:
+    get:
+      summary: Get package list
+      description: Provides the list of available plan offers for clients.
+      operationId: getDistributorPackageList
+      responses:
+        '200':
+          description: Package list retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, count, items]
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  count:
+                    type: integer
+                    example: 2
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProductMappingItem'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /v2/dist/create/order:
+    post:
+      summary: Create order
+      description: |-
+        Client must pass the access token from the Request OAuth token API in the Authorization header.
+        Use this format: `Authorization: Bearer <ACCESS_TOKEN>`.
+      operationId: createDistributorOrder
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDistributorOrderRequest'
+            examples:
+              withProductCode:
+                value:
+                  transactionId: txn-001
+                  productCode: PROD001
+      responses:
+        '200':
+          description: Distributor order created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, item]
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  item:
+                    $ref: '#/components/schemas/DistributorOrderItem'
+        '400':
+          description: Validation error, invalid product price, or insufficient balance
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/BasicError'
+                  - $ref: '#/components/schemas/InsufficientBalanceError'
+              examples:
+                missingTransactionId:
+                  value:
+                    success: false
+                    message: request body transactionId is required
+                missingProduct:
+                  value:
+                    success: false
+                    message: request body productCode is required
+                invalidProductPrice:
+                  value:
+                    success: false
+                    message: product wholesalePrice is invalid
+                insufficientBalance:
+                  value:
+                    success: false
+                    message: insufficient distributor wallet balance
+                    currentBalance: 10000
+                    requiredBalance: 25000
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BasicError'
+              examples:
+                missingBearer:
+                  value:
+                    success: false
+                    message: missing or invalid authorization bearer token
+                missingClientId:
+                  value:
+                    success: false
+                    message: clientId not found in access token
+        '404':
+          description: Product mapping not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BasicError'
+              example:
+                success: false
+                message: product mapping not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /v2/dist/wallet/balance:
+    get:
+      summary: Get wallet balance
+      operationId: getDistributorWalletBalance
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Wallet balance retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, balance, distributorName, distributorId, email]
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  balance:
+                    type: number
+                    example: 250000
+                  distributorName:
+                    type: string
+                    example: Demo Distributor
+                  distributorId:
+                    type: string
+                    example: dist_123
+                  email:
+                    type: string
+                    example: distributor@example.com
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BasicError'
+              examples:
+                missingBearer:
+                  value:
+                    success: false
+                    message: missing or invalid authorization bearer token
+                missingClientId:
+                  value:
+                    success: false
+                    message: clientId not found in access token
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [success, message, error]
+            properties:
+              success:
+                type: boolean
+                example: false
+              message:
+                type: string
+                example: failed to create distributor order
+              error:
+                type: string
+                example: unknown error
+
+  schemas:
+    BasicError:
+      type: object
+      required: [success, message]
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+
+    InsufficientBalanceError:
+      type: object
+      required: [success, message, currentBalance, requiredBalance]
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: insufficient distributor wallet balance
+        currentBalance:
+          type: number
+          example: 10000
+        requiredBalance:
+          type: number
+          example: 25000
+
+    DistributorOauthTokenRequest:
+      type: object
+      description: OAuth client credentials payload.
+      required: [clientId, clientSecret]
+      properties:
+        clientId:
+          type: string
+          description: OAuth client id.
+          example: your-client-id
+        clientSecret:
+          type: string
+          description: OAuth client secret.
+          example: your-client-secret
+
+    CreateDistributorOrderRequest:
+      type: object
+      required: [transactionId, productCode]
+      properties:
+        transactionId:
+          type: string
+          example: txn-001
+        productCode:
+          type: string
+          example: PROD001
+
+    DistributorOrderItem:
+      type: object
+      required:
+        - orderId
+        - transactionId
+        - productCode
+        - price
+        - orderType
+        - createdAt
+        - status
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        transactionId:
+          type: string
+        productCode:
+          type: string
+        price:
+          type: number
+          description: Stored as wholesalePrice multiplied by 1000
+          example: 250000
+        orderType:
+          type: string
+          example: esim
+        createdAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          example: PAID
+      additionalProperties: false
+
+    ProductMappingItem:
+      type: object
+      description: Product mapping payload from DynamoDB with wholesale-only filter applied.
+      properties:
+        productCode:
+          type: string
+          description: Product code identifier.
+          example: PROD001
+        networkProvider:
+          type: array
+          description: List of network provider names.
+          items:
+            type: string
+          example:
+            - XLSmart
+            - Telkomsel
+      additionalProperties: true

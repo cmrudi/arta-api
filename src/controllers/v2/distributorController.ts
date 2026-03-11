@@ -66,7 +66,7 @@ export const createDistOrder = async (
   res: Response<unknown, AuthenticatedLocals>,
 ): Promise<Response> => {
   const transactionId = req.body?.transactionId;
-  const productCode = req.body?.productCode || req.body?.productId;
+  const productCode = req.body?.productCode;
 
   if (typeof transactionId !== 'string' || !transactionId.trim()) {
     return res.status(400).json({
@@ -78,7 +78,7 @@ export const createDistOrder = async (
   if (typeof productCode !== 'string' || !productCode.trim()) {
     return res.status(400).json({
       success: false,
-      message: 'request body productId or productCode is required',
+      message: 'request body productCode is required',
     });
   }
 
@@ -121,10 +121,19 @@ export const createDistOrder = async (
       });
     }
 
+    const item = {
+      orderId: result.order.orderId,
+      transactionId: result.order.transactionId,
+      productCode: result.order.productCode,
+      price: result.order.price,
+      orderType: result.order.orderType,
+      createdAt: result.order.createdAt,
+      status: result.order.status,
+    };
+
     return res.status(200).json({
       success: true,
-      item: result.order,
-      invokedFunctionName: result.invokedFunctionName,
+      item,
     });
   } catch (error) {
     return res.status(500).json({
