@@ -191,7 +191,7 @@ export const reduceDistributorWalletBalance = async (
 ): Promise<{ Attributes?: Record<string, unknown> }> =>
   sendDynamoCommand(
     new UpdateCommand({
-      TableName: process.env.DISTRIBUTOR_WALLET_TABLE_NAME,
+      TableName: DISTRIBUTOR_WALLET_TABLE_NAME,
       Key: { distributorId },
       UpdateExpression: 'SET balance = balance - :amt',
       ConditionExpression: 'balance >= :amt',
@@ -206,7 +206,7 @@ export const increaseDistributorWalletBalance = async (
 ): Promise<{ Attributes?: Record<string, unknown> }> =>
   sendDynamoCommand(
     new UpdateCommand({
-      TableName: process.env.DISTRIBUTOR_WALLET_TABLE_NAME,
+      TableName: DISTRIBUTOR_WALLET_TABLE_NAME,
       Key: { distributorId },
       UpdateExpression: 'SET balance = balance + :amt',
       ExpressionAttributeValues: { ':amt': amount },
