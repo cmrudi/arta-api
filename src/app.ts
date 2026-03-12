@@ -11,6 +11,8 @@ dotenv.config();
 const app = express();
 const docsPath = path.resolve(process.cwd(), 'docs');
 
+app.set('trust proxy', true);
+
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -24,6 +26,19 @@ app.use(
 app.use(cors());
 app.use(express.json());
 app.use(morgan('dev'));
+app.use('/docs', (req, res, next) => {
+  const forwardedProto = req.get('x-forwarded-proto');
+
+  if (forwardedProto && forwardedProto !== 'https') {
+    const host = req.get('host');
+
+    if (host) {
+      return res.redirect(301, `https://${host}${req.originalUrl}`);
+    }
+  }
+
+  next();
+});
 app.get('/docs', (_req, res) => {
   res.sendFile(path.join(docsPath, 'index.html'));
 });
