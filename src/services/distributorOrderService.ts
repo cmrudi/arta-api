@@ -1,7 +1,12 @@
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { randomUUID } from 'crypto';
 
-import { createOrder, findProductByProductCode } from '../lib/dynamoDb';
+import {
+  createOrder,
+  findProductByProductCode,
+  increaseDistributorWalletBalance,
+  reduceDistributorWalletBalance,
+} from '../lib/dynamoDb';
 import { OrderItem } from '../models/order';
 import { findDistributorWalletBalance } from './distributorWalletService';
 
@@ -83,14 +88,30 @@ export const createDistributorOrder = async (
   }
 
   const wallet = await findDistributorWalletBalance(payload.clientId);
+  const amount = wholesalePrice * 1000;
 
-  if (wallet.balance < wholesalePrice) {
+  if (wallet.balance < amount) {
     return {
       success: false,
       reason: 'INSUFFICIENT_BALANCE',
       currentBalance: wallet.balance,
-      requiredBalance: wholesalePrice,
+      requiredBalance: amount,
     };
+  }
+
+  try {
+    await reduceDistributorWalletBalance(wallet.distributorId, amount);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+      return {
+        success: false,
+        reason: 'INSUFFICIENT_BALANCE',
+        currentBalance: wallet.balance,
+        requiredBalance: amount,
+      };
+    }
+
+    throw error;
   }
 
   const order: OrderItem = {
@@ -98,7 +119,7 @@ export const createDistributorOrder = async (
     transactionId: payload.transactionId,
     email: wallet.email,
     productCode: payload.productCode,
-    price: wholesalePrice * 1000,
+    price: amount,
     paymentType: 'distributorWallet',
     distributor: wallet.distributorName,
     distributorId: wallet.distributorId,
@@ -108,7 +129,21 @@ export const createDistributorOrder = async (
   };
   console.log('Creating distributor order with data:', order);
 
-  await createOrder(order);
+  try {
+    await createOrder(order);
+  } catch (createOrderError) {
+    try {
+      await increaseDistributorWalletBalance(wallet.distributorId, amount);
+    } catch (refundError) {
+      console.error('Failed to rollback distributor wallet balance after createOrder error', {
+        distributorId: wallet.distributorId,
+        amount,
+        refundError,
+      });
+    }
+
+    throw createOrderError;
+  }
 
   const provider = normalizeString(product.provider).toLowerCase();
   const functionName =
