@@ -8,7 +8,10 @@ import {
   createDistributorOrder,
 } from '../../services/distributorOrderService';
 import { requestDistributorOauthToken } from '../../services/distributorOauthService';
-import { findDistributorPackageList } from '../../services/distributorService';
+import {
+  findDistributorEsimBySimId,
+  findDistributorPackageList,
+} from '../../services/distributorService';
 import { findDistributorWalletBalance } from '../../services/distributorWalletService';
 
 export const getDistributorPackageList = async (_req: Request, res: Response): Promise<Response> => {
@@ -56,6 +59,32 @@ export const getDistributorWalletBalance = async (
     return res.status(500).json({
       success: false,
       message: 'failed to read distributor wallet balance',
+      error: error instanceof Error ? error.message : 'unknown error',
+    });
+  }
+};
+
+export const getDistributorEsimBySimId = async (
+  req: Request,
+  res: Response,
+): Promise<Response> => {
+  const simId = req.params?.simId;
+
+  if (typeof simId !== 'string' || !simId.trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'request param simId is required',
+    });
+  }
+
+  try {
+    const result = await findDistributorEsimBySimId(simId.trim());
+
+    return res.status(result.statusCode).json(result.payload);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'failed to fetch distributor sim detail',
       error: error instanceof Error ? error.message : 'unknown error',
     });
   }
