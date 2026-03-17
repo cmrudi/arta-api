@@ -192,7 +192,7 @@ export const findDistributorEsimBySimId = async (
   const response = await lambdaClient.send(
     new InvokeCommand({
       FunctionName: GET_ESIM_BY_SIM_ID_FUNCTION_NAME,
-      Payload: Buffer.from(JSON.stringify({ simId })),
+      Payload: Buffer.from(JSON.stringify({ SimId : simId })),
     }),
   );
 
