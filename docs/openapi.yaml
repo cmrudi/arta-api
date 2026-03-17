@@ -102,6 +102,77 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /v2/dist/sim/{simId}:
+    get:
+      summary: Get eSIM detail by simId
+      description: |-
+        Client must pass the access token from the Request OAuth token API in the Authorization header.
+        Use this format: `Authorization: Bearer <ACCESS_TOKEN>`.
+      operationId: getDistributorEsimBySimId
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: simId
+          in: path
+          required: true
+          description: eSIM identifier.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: eSIM detail retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DistributorSimDetailResponse'
+              example:
+                region:
+                  shopImageUrl: https://d1qsbuaxtzmcn4.cloudfront.net/country-order-page/saudi-arabia.png
+                  regionCode: sa
+                  name: Arab Saudi (Umrah)
+                  networkProvider:
+                    - name: Zain
+                      imageUrl: https://d1qsbuaxtzmcn4.cloudfront.net/networkProvider/zain.svg
+                    - name: STC
+                      imageUrl: https://d1qsbuaxtzmcn4.cloudfront.net/networkProvider/stc.svg
+                esim:
+                  filename: infinityroamservicegmailcomgRYEzUHNUIQAHxHvCZsotTxCIEJFwINUwk3QiBwnetk70aEKj6ZB6kfLzz4Eq31IENpKN1k8RGgL7x2s1lbH1JetCMp5FSFZm3aU.png
+                  firstRegion: sa
+                  activationCode: LPA:1$rsp-eu.simlessly.com$F24E227B02344CC9AFB4F1EF41EDBFD7
+                  status: ESIM_CREATED
+                  createdAt: '2026-03-04T20:22:15.808Z'
+                  iccid: '8932042000016212252'
+                  label: eSIM Arab Saudi (Replacement)
+                  recipient: nusakenari33@gmail.com
+                  SimId: a2d7872e-7c20-4728-ac77-017e759f6cbb
+                usage:
+                  quota: 20
+                  balance: 20
+                plans:
+                  - validity: 30
+                    quota: 20
+        '400':
+          description: Missing required request field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BasicError'
+              example:
+                success: false
+                message: request param simId is required
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BasicError'
+              example:
+                success: false
+                message: missing or invalid authorization bearer token
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   /v2/dist/create/order:
     post:
       summary: Create order
@@ -411,6 +482,109 @@ components:
             - XLSmart
             - Telkomsel
       additionalProperties: true
+
+    DistributorSimDetailResponse:
+      type: object
+      required: [region, esim, usage, plans]
+      properties:
+        region:
+          $ref: '#/components/schemas/DistributorSimRegion'
+        esim:
+          $ref: '#/components/schemas/DistributorEsim'
+        usage:
+          $ref: '#/components/schemas/DistributorEsimUsage'
+        plans:
+          type: array
+          items:
+            $ref: '#/components/schemas/DistributorEsimPlan'
+
+    DistributorSimRegion:
+      type: object
+      required: [shopImageUrl, regionCode, name, networkProvider]
+      properties:
+        shopImageUrl:
+          type: string
+          format: uri
+        regionCode:
+          type: string
+          example: sa
+        name:
+          type: string
+          example: Arab Saudi (Umrah)
+        networkProvider:
+          type: array
+          items:
+            $ref: '#/components/schemas/DistributorNetworkProvider'
+
+    DistributorNetworkProvider:
+      type: object
+      required: [name, imageUrl]
+      properties:
+        name:
+          type: string
+          example: Zain
+        imageUrl:
+          type: string
+          format: uri
+
+    DistributorEsim:
+      type: object
+      required:
+        - filename
+        - firstRegion
+        - activationCode
+        - status
+        - createdAt
+        - iccid
+        - label
+        - recipient
+        - SimId
+      properties:
+        filename:
+          type: string
+        firstRegion:
+          type: string
+          example: sa
+        activationCode:
+          type: string
+        status:
+          type: string
+          example: ESIM_CREATED
+        createdAt:
+          type: string
+          format: date-time
+        iccid:
+          type: string
+        label:
+          type: string
+        recipient:
+          type: string
+          format: email
+        SimId:
+          type: string
+          format: uuid
+
+    DistributorEsimUsage:
+      type: object
+      required: [quota, balance]
+      properties:
+        quota:
+          type: number
+          example: 20
+        balance:
+          type: number
+          example: 20
+
+    DistributorEsimPlan:
+      type: object
+      required: [validity, quota]
+      properties:
+        validity:
+          type: integer
+          example: 30
+        quota:
+          type: number
+          example: 20
 
     SimGeneratedCallbackRequest:
       type: object
