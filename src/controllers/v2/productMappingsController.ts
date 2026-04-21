@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 
 import { findProductMappings } from '../../services/productMappingService';
+import { updateSupplierCostsFromProviders } from '../../services/supplierCostService';
 
 export const getProductMappings = async (_req: Request, res: Response): Promise<Response> => {
   try {
@@ -16,6 +17,23 @@ export const getProductMappings = async (_req: Request, res: Response): Promise<
     return res.status(500).json({
       success: false,
       message: 'failed to read product mappings from DynamoDB',
+      error: error instanceof Error ? error.message : 'unknown error',
+    });
+  }
+};
+
+export const updateSupplierCosts = async (_req: Request, res: Response): Promise<Response> => {
+  try {
+    const result = await updateSupplierCostsFromProviders();
+
+    return res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'failed to update supplier costs',
       error: error instanceof Error ? error.message : 'unknown error',
     });
   }

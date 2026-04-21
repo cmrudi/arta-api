@@ -10,6 +10,7 @@ const PRODUCT_MAPPING_TABLE_NAME = 'ProductMapping';
 const REGION_TABLE_NAME = 'Region';
 const PROMO_CODE_TABLE_NAME = 'PromoCode';
 const DISTRIBUTOR_WALLET_TABLE_NAME = 'DistributorWallet';
+const SUPPLIER_COST_TABLE_NAME = 'SupplierCost';
 const ORDER_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
 
 export const scanPartnerOrdersByDateRange = async (
@@ -136,6 +137,64 @@ export const scanAllProductMappings = async (): Promise<{
   sendDynamoCommand(
     new ScanCommand({
       TableName: PRODUCT_MAPPING_TABLE_NAME,
+    }),
+  );
+
+export const scanAllProductMappingsPaginated = async (
+  lastEvaluatedKey?: Record<string, unknown>,
+): Promise<{
+  Items?: Record<string, unknown>[];
+  LastEvaluatedKey?: Record<string, unknown>;
+}> =>
+  sendDynamoCommand(
+    new ScanCommand({
+      TableName: PRODUCT_MAPPING_TABLE_NAME,
+      ExclusiveStartKey: lastEvaluatedKey,
+    }),
+  );
+
+export const scanAllSupplierCostsPaginated = async (
+  lastEvaluatedKey?: Record<string, unknown>,
+): Promise<{
+  Items?: Record<string, unknown>[];
+  LastEvaluatedKey?: Record<string, unknown>;
+}> =>
+  sendDynamoCommand(
+    new ScanCommand({
+      TableName: SUPPLIER_COST_TABLE_NAME,
+      ExclusiveStartKey: lastEvaluatedKey,
+    }),
+  );
+
+export const putSupplierCost = async (
+  item: Record<string, unknown>,
+): Promise<Record<string, unknown>> =>
+  sendDynamoCommand(
+    new PutCommand({
+      TableName: SUPPLIER_COST_TABLE_NAME,
+      Item: item,
+    }),
+  );
+
+export const updateSupplierCostByProductCode = async (
+  productCode: string,
+  cost: number,
+  updatedAt: string,
+): Promise<{ Attributes?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new UpdateCommand({
+      TableName: SUPPLIER_COST_TABLE_NAME,
+      Key: { productCode },
+      UpdateExpression: 'SET #cost = :cost, #updatedAt = :updatedAt',
+      ExpressionAttributeNames: {
+        '#cost': 'cost',
+        '#updatedAt': 'updatedAt',
+      },
+      ExpressionAttributeValues: {
+        ':cost': cost,
+        ':updatedAt': updatedAt,
+      },
+      ReturnValues: 'ALL_NEW',
     }),
   );
 
