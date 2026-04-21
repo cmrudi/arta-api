@@ -13,7 +13,7 @@ const MAYA_PRODUCTS_URL = 'https://api.maya.net/connectivity/v1/account/products
 const MAYA_AUTHORIZATION =
   'Basic eTBaS2dSQ1h5VjdpOjF1RXlobDRHZlBCb2JZVVhzNk1VRENkUHRRNHlsSFhjb2d3N2hFcnduWlpWYjhPNWFMazlDY2kyUmp4enRKRnYg';
 
-const roundToOneDecimal = (value: number): number => Math.round(value * 10) / 10;
+const roundToTwoDecimals = (value: number): number => Math.round(value * 100) / 100;
 
 type MayaProduct = {
   uid: string;
@@ -165,7 +165,7 @@ const computeMayaCost = (supplierId: string, mayaMap: Map<string, MayaProduct>):
     return null;
   }
 
-  return roundToOneDecimal(wholesalePrice * MAYA_COST_MULTIPLIER);
+  return roundToTwoDecimals(wholesalePrice * MAYA_COST_MULTIPLIER);
 };
 
 const computeEsimAccessCost = (
@@ -178,7 +178,7 @@ const computeEsimAccessCost = (
     return null;
   }
 
-  return roundToOneDecimal(pkg.price / ESIMACCESS_PRICE_DIVISOR);
+  return roundToTwoDecimals(pkg.price / ESIMACCESS_PRICE_DIVISOR);
 };
 
 export const updateSupplierCostsFromProviders = async (): Promise<UpdateSupplierCostsResult> => {
