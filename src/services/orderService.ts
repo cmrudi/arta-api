@@ -275,6 +275,7 @@ export const recoverOrderById = async (orderId: string): Promise<RecoverOrderRes
     status !== ORDER_STATUS_CREATED
     && status !== ORDER_STATUS_PAID
     && status !== ORDER_STATUS_ESIM_ORDERED
+    && status !== ORDER_STATUS_ORDER_FULFILLED
   ) {
     return {
       success: false,
@@ -304,6 +305,66 @@ export const recoverOrderById = async (orderId: string): Promise<RecoverOrderRes
       midtrans: {},
       action: 'STATUS_UPDATED_AND_LAMBDA_INVOKED',
       invokedFunctionName: functionName,
+    };
+  }
+
+  if (status === ORDER_STATUS_ORDER_FULFILLED) {
+    if (order['combo'] !== true) {
+      return {
+        success: true,
+        order: order as OrderItem,
+        midtrans: {},
+        action: 'NO_ACTION',
+      };
+    }
+
+    const providerOrderNo = normalizeString(order[ORDER_PROVIDER_ORDER_NO_ATTRIBUTE]);
+
+    if (!providerOrderNo) {
+      return {
+        success: false,
+        reason: 'PROVIDER_ORDER_NO_NOT_FOUND',
+      };
+    }
+
+    let esimAccessResponse: Record<string, unknown>;
+
+    try {
+      esimAccessResponse = await queryEsimAccessByOrderNo(providerOrderNo);
+    } catch (error) {
+      return {
+        success: false,
+        reason: 'ESIMACCESS_QUERY_FAILED',
+        message: error instanceof Error ? error.message : 'unknown error',
+      };
+    }
+
+    const success = esimAccessResponse.success === true;
+    const responseObj = esimAccessResponse.obj as Record<string, unknown> | undefined;
+    const esimList = Array.isArray(responseObj?.esimList) ? responseObj?.esimList : [];
+
+    if (success && esimList.length === 1) {
+      const firstEsim = esimList[0] as Record<string, unknown>;
+      const packageList = Array.isArray(firstEsim?.packageList) ? firstEsim.packageList : [];
+
+      if (packageList.length === 1) {
+        await invokeLambdaAsyncByName('esimAccessProcessComboOrder', orderId);
+
+        return {
+          success: true,
+          order: order as OrderItem,
+          midtrans: esimAccessResponse,
+          action: 'STATUS_UPDATED_AND_LAMBDA_INVOKED',
+          invokedFunctionName: 'esimAccessProcessComboOrder',
+        };
+      }
+    }
+
+    return {
+      success: true,
+      order: order as OrderItem,
+      midtrans: esimAccessResponse,
+      action: 'NO_ACTION',
     };
   }
 
