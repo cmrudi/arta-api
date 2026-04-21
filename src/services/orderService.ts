@@ -11,7 +11,7 @@ import {
 import { OrderItem } from '../models/order';
 
 const ORDER_STATUS_ATTRIBUTE = 'status';
-const IN_PROGRESS_STATUSES = ['CREATED', 'PAID', 'ESIM_ORDERED', 'ESIM_FULFILLED'];
+const IN_PROGRESS_STATUSES = ['CREATED', 'PAID', 'ESIM_ORDERED', 'ORDER_FULFILLED', 'ORDER_COMBO_ADDED'];
 const ORDER_TYPE_ATTRIBUTE = 'orderType';
 const ORDER_STATUS_CREATED = 'CREATED';
 const ORDER_STATUS_PAID = 'PAID';
