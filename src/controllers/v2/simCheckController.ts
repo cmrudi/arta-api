@@ -25,6 +25,7 @@ export const getSimCheck = async (req: Request, res: Response): Promise<Response
     return res.status(200).json({
       success: true,
       iccid: result.iccid,
+      inventory: result.inventory,
       order: result.order,
       simCard: result.simCard,
       simInfo: result.simInfo,

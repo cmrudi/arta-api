@@ -1,20 +1,25 @@
-import { getOrderById, querySimCardsByIccid } from '../lib/dynamoDb';
+import {
+  getOrderById,
+  getSimInventoryByIccid,
+  querySimCardsByIccid,
+} from '../lib/dynamoDb';
 import { getXploriSimInfo, getXploriUsage } from './xploriService';
 
-type XploriSection = Record<string, unknown> | { error: string };
+type XploriSection = Record<string, unknown> | { error: string } | null;
 
 type SimCheckSuccess = {
   success: true;
   iccid: string;
-  order: Record<string, unknown>;
-  simCard: Record<string, unknown>;
+  inventory: Record<string, unknown>;
+  order: Record<string, unknown> | null;
+  simCard: Record<string, unknown> | null;
   simInfo: XploriSection;
   usage: XploriSection;
 };
 
 type SimCheckError = {
   success: false;
-  reason: 'NOT_FOUND';
+  reason: 'ICCID_NOT_FOUND';
   message: string;
 };
 
@@ -33,37 +38,35 @@ const settle = async (
 };
 
 export const checkSim = async (iccid: string): Promise<SimCheckResult> => {
+  // Gate on the inventory first: an iccid we don't own is "not found".
+  const inventoryResult = await getSimInventoryByIccid(iccid);
+  const inventory = inventoryResult.Item;
+
+  if (!inventory) {
+    return {
+      success: false,
+      reason: 'ICCID_NOT_FOUND',
+      message: 'ICCID not found',
+    };
+  }
+
+  // The remaining data is best-effort: an in-inventory SIM may not be sold yet
+  // (no SIMCards / Order row), so absence is null rather than an error.
   const simResult = await querySimCardsByIccid(iccid);
-  const simCard = (simResult.Items || [])[0];
+  const simCard = (simResult.Items || [])[0] ?? null;
 
-  if (!simCard) {
-    return {
-      success: false,
-      reason: 'NOT_FOUND',
-      message: 'no SIMCards entry found for iccid',
-    };
-  }
-
-  const orderId = String(simCard.orderId || '');
-  const orderResult = orderId ? await getOrderById(orderId) : { Item: undefined };
-  const order = orderResult.Item;
-
-  if (!order) {
-    return {
-      success: false,
-      reason: 'NOT_FOUND',
-      message: 'no Order entry found for iccid',
-    };
-  }
+  const orderId = simCard ? String(simCard.orderId || '') : '';
+  const order = orderId ? (await getOrderById(orderId)).Item ?? null : null;
 
   const [simInfo, usage] = await Promise.all([
     settle(() => getXploriSimInfo(iccid)),
-    settle(() => getXploriUsage(orderId)),
+    orderId ? settle(() => getXploriUsage(orderId)) : Promise.resolve(null),
   ]);
 
   return {
     success: true,
     iccid,
+    inventory,
     order,
     simCard,
     simInfo,

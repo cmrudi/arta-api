@@ -13,6 +13,7 @@ const DISTRIBUTOR_WALLET_TABLE_NAME = 'DistributorWallet';
 const SUPPLIER_COST_TABLE_NAME = 'SupplierCost';
 const SIM_CARDS_TABLE_NAME = 'SIMCards';
 const SIM_CARDS_ICCID_INDEX = 'iccid-index';
+const SIM_CARD_INVENTORY_TABLE_NAME = 'SIMCardInventory';
 const ORDER_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
 
 export const scanPartnerOrdersByDateRange = async (
@@ -266,6 +267,19 @@ export const querySimCardsByIccid = async (
       },
       ExpressionAttributeValues: {
         ':iccid': iccid,
+      },
+    }),
+  );
+
+// SIMCardInventory partition key is "Iccid" (capital I), stored as a String.
+export const getSimInventoryByIccid = async (
+  iccid: string,
+): Promise<{ Item?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new GetCommand({
+      TableName: SIM_CARD_INVENTORY_TABLE_NAME,
+      Key: {
+        Iccid: iccid,
       },
     }),
   );
