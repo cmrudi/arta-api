@@ -11,6 +11,7 @@ const REGION_TABLE_NAME = 'Region';
 const PROMO_CODE_TABLE_NAME = 'PromoCode';
 const DISTRIBUTOR_WALLET_TABLE_NAME = 'DistributorWallet';
 const SUPPLIER_COST_TABLE_NAME = 'SupplierCost';
+const SIM_CARDS_TABLE_NAME = 'SIMCards';
 const ORDER_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
 
 export const scanPartnerOrdersByDateRange = async (
@@ -202,6 +203,28 @@ export const scanAllRegions = async (): Promise<{ Count?: number; Items?: Record
   sendDynamoCommand(
     new ScanCommand({
       TableName: REGION_TABLE_NAME,
+    }),
+  );
+
+export const getRegionByCode = async (
+  regionCode: string,
+): Promise<{ Item?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new GetCommand({
+      TableName: REGION_TABLE_NAME,
+      Key: {
+        regionCode,
+      },
+    }),
+  );
+
+export const storeSim = async (
+  sim: Record<string, unknown>,
+): Promise<Record<string, unknown>> =>
+  sendDynamoCommand(
+    new PutCommand({
+      TableName: SIM_CARDS_TABLE_NAME,
+      Item: sim,
     }),
   );
 
