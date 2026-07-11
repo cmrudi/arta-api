@@ -142,7 +142,7 @@ export const createInternalOrder = async (
     firstRegion: product.regionCode,
     provider: XPLORI_PROVIDER,
     simType: normalizeString(product.simType),
-    status: 'SIM_ACTIVATED',
+    status: 'SIM_CREATED',
     startUsingDate: xploriResult.startUsingDate,
     createdAt: new Date().toISOString(),
   };
