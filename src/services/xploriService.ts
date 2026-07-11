@@ -51,6 +51,12 @@ export const createXploriOrder = async (
     throw new Error('XPLORI_API_KEY is not configured');
   }
 
+  // Accept the key either raw or already prefixed ("Api-Key <key>") so the
+  // Authorization header isn't doubled up when the env var includes the scheme.
+  const authorization = /^api-key\s/i.test(apiKey.trim())
+    ? apiKey.trim()
+    : `Api-Key ${apiKey.trim()}`;
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), XPLORI_TIMEOUT_MS);
 
@@ -60,7 +66,7 @@ export const createXploriOrder = async (
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
-        Authorization: `Api-Key ${apiKey}`,
+        Authorization: authorization,
       },
       body: JSON.stringify({
         booking_id: payload.bookingId,
