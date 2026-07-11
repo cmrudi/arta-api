@@ -12,6 +12,7 @@ const PROMO_CODE_TABLE_NAME = 'PromoCode';
 const DISTRIBUTOR_WALLET_TABLE_NAME = 'DistributorWallet';
 const SUPPLIER_COST_TABLE_NAME = 'SupplierCost';
 const SIM_CARDS_TABLE_NAME = 'SIMCards';
+const SIM_CARDS_ICCID_INDEX = 'iccid-index';
 const ORDER_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
 
 export const scanPartnerOrdersByDateRange = async (
@@ -225,6 +226,23 @@ export const storeSim = async (
     new PutCommand({
       TableName: SIM_CARDS_TABLE_NAME,
       Item: sim,
+    }),
+  );
+
+export const querySimCardsByIccid = async (
+  iccid: string,
+): Promise<{ Items?: Record<string, unknown>[] }> =>
+  sendDynamoCommand(
+    new QueryCommand({
+      TableName: SIM_CARDS_TABLE_NAME,
+      IndexName: SIM_CARDS_ICCID_INDEX,
+      KeyConditionExpression: '#iccid = :iccid',
+      ExpressionAttributeNames: {
+        '#iccid': 'iccid',
+      },
+      ExpressionAttributeValues: {
+        ':iccid': iccid,
+      },
     }),
   );
 

@@ -151,6 +151,8 @@ export const createInternalOrder = async (
   };
   await storeSim(simRecord);
 
+  await updateOrderStatus(orderId, 'ESIM_PUBLISHED');
+
   // Best-effort internal notification — never block fulfillment on email.
   try {
     const regionResult = await getRegionByCode(String(product.regionCode || ''));
@@ -178,7 +180,7 @@ export const createInternalOrder = async (
       orderId,
       productCode: payload.productCode,
       price,
-      status: 'ORDER_FULFILLED',
+      status: 'ESIM_PUBLISHED',
     },
     sim: {
       simId: String(simRecord.SimId),
