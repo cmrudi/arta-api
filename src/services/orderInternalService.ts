@@ -54,7 +54,10 @@ const parseNumber = (value: unknown): number => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
-const normalizeString = (value: unknown): string => String(value || '').trim();
+// Use nullish coalescing so numeric values like 0 (e.g. simType stored as a
+// DynamoDB Number) are preserved rather than collapsing to '' via `0 || ''`.
+const normalizeString = (value: unknown): string =>
+  value === null || value === undefined ? '' : String(value).trim();
 
 export const createInternalOrder = async (
   payload: CreateInternalOrderPayload,
