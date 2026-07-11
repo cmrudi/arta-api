@@ -284,6 +284,33 @@ export const getSimInventoryByIccid = async (
     }),
   );
 
+// Marks an inventory iccid as used. ConditionExpression guards against creating
+// a phantom row if the iccid isn't actually in inventory.
+export const markSimInventoryUsed = async (
+  iccid: string,
+  orderId: string,
+  usedAt: string,
+): Promise<{ Attributes?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new UpdateCommand({
+      TableName: SIM_CARD_INVENTORY_TABLE_NAME,
+      Key: { Iccid: iccid },
+      UpdateExpression: 'SET #status = :status, #usedAt = :usedAt, #orderId = :orderId',
+      ConditionExpression: 'attribute_exists(Iccid)',
+      ExpressionAttributeNames: {
+        '#status': 'status',
+        '#usedAt': 'usedAt',
+        '#orderId': 'orderId',
+      },
+      ExpressionAttributeValues: {
+        ':status': 'USED',
+        ':usedAt': usedAt,
+        ':orderId': orderId,
+      },
+      ReturnValues: 'ALL_NEW',
+    }),
+  );
+
 export const getPromoCodeByCode = async (
   code: string,
 ): Promise<{ Item?: Record<string, unknown> }> =>

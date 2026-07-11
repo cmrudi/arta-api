@@ -11,6 +11,7 @@ type SimCheckSuccess = {
   success: true;
   iccid: string;
   inventory: Record<string, unknown>;
+  eligibleToAddPackage: boolean;
   order: Record<string, unknown> | null;
   simCard: Record<string, unknown> | null;
   simInfo: XploriSection;
@@ -67,6 +68,8 @@ export const checkSim = async (iccid: string): Promise<SimCheckResult> => {
     success: true,
     iccid,
     inventory,
+    // In inventory but no order yet → the SIM can have a package added.
+    eligibleToAddPackage: order === null,
     order,
     simCard,
     simInfo,

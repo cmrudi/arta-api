@@ -4,6 +4,7 @@ import {
   createOrder,
   findProductByProductCode,
   getRegionByCode,
+  markSimInventoryUsed,
   storeSim,
   updateOrderStatus,
 } from '../lib/dynamoDb';
@@ -152,6 +153,18 @@ export const createInternalOrder = async (
   await storeSim(simRecord);
 
   await updateOrderStatus(orderId, 'ESIM_PUBLISHED');
+
+  // Mark the inventory iccid as used now that the order is published.
+  // Best-effort — the order is already fulfilled, so don't fail it on this.
+  try {
+    await markSimInventoryUsed(payload.iccid, orderId, new Date().toISOString());
+  } catch (error) {
+    console.error('Failed to mark inventory iccid as used', {
+      orderId,
+      iccid: payload.iccid,
+      error: error instanceof Error ? error.message : error,
+    });
+  }
 
   // Best-effort internal notification — never block fulfillment on email.
   try {
