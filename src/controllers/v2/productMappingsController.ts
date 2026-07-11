@@ -3,9 +3,11 @@ import { Request, Response } from 'express';
 import { findProductMappings } from '../../services/productMappingService';
 import { updateSupplierCostsFromProviders } from '../../services/supplierCostService';
 
-export const getProductMappings = async (_req: Request, res: Response): Promise<Response> => {
+export const getProductMappings = async (req: Request, res: Response): Promise<Response> => {
   try {
-    const result = await findProductMappings();
+    const simTypeParam = req.query?.simType;
+    const simType = typeof simTypeParam === 'string' ? simTypeParam : undefined;
+    const result = await findProductMappings(simType);
 
     return res.status(200).json({
       success: true,

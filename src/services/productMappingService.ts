@@ -1,4 +1,7 @@
-import { scanAllProductMappings } from '../lib/dynamoDb';
+import {
+  scanAllProductMappings,
+  scanEnabledProductMappingsBySimType,
+} from '../lib/dynamoDb';
 import { ProductMappingItem } from '../models/productMapping';
 
 const PRODUCT_MAPPING_TABLE_NAME = 'ProductMapping';
@@ -19,8 +22,13 @@ const sanitizeProductMappingItem = (item: ProductMappingItem): ProductMappingIte
   return sanitized;
 };
 
-export const findProductMappings = async (): Promise<FindProductMappingsResult> => {
-  const result = await scanAllProductMappings();
+export const findProductMappings = async (
+  simType?: string,
+): Promise<FindProductMappingsResult> => {
+  const hasSimTypeFilter = simType !== undefined && simType !== '';
+  const result = hasSimTypeFilter
+    ? await scanEnabledProductMappingsBySimType(simType)
+    : await scanAllProductMappings();
   const items = ((result.Items || []) as ProductMappingItem[]).map(sanitizeProductMappingItem);
 
   return {

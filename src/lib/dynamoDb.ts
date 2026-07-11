@@ -142,6 +142,30 @@ export const scanAllProductMappings = async (): Promise<{
     }),
   );
 
+// simType is stored as a DynamoDB Number, so filter with a numeric value when
+// the query param is numeric. Only enabled products are returned.
+export const scanEnabledProductMappingsBySimType = async (
+  simType: string,
+): Promise<{ Count?: number; Items?: Record<string, unknown>[] }> => {
+  const numeric = Number(simType);
+  const simTypeValue: number | string = Number.isFinite(numeric) ? numeric : simType;
+
+  return sendDynamoCommand(
+    new ScanCommand({
+      TableName: PRODUCT_MAPPING_TABLE_NAME,
+      FilterExpression: '#simType = :simType AND #enabled = :enabled',
+      ExpressionAttributeNames: {
+        '#simType': 'simType',
+        '#enabled': 'enabled',
+      },
+      ExpressionAttributeValues: {
+        ':simType': simTypeValue,
+        ':enabled': true,
+      },
+    }),
+  );
+};
+
 export const scanAllProductMappingsPaginated = async (
   lastEvaluatedKey?: Record<string, unknown>,
 ): Promise<{
