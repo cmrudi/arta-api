@@ -1,10 +1,16 @@
 import { NextFunction, Request, Response } from 'express';
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import jwt, { Algorithm, JwtPayload, VerifyErrors, VerifyOptions } from 'jsonwebtoken';
 
 import { AuthenticatedLocals, getAuth0Email } from './auth0BearerAuth';
 
-const END_USER_MIDDLEWARE_VERSION = '2026-08-10-1';
+const END_USER_MIDDLEWARE_VERSION = '2026-08-10-2';
 const isAuth0DebugEnabled = (): boolean => process.env.AUTH0_DEBUG === 'true';
+
+// NOTE: the JWKS/PEM helpers below mirror auth0BearerAuth.ts rather than being
+// shared. That duplication is deliberate — it keeps the machine-to-machine
+// middleware guarding the distributor routes completely untouched. Do not
+// replace this with `jose`: it is ESM-only from v6, and this service compiles to
+// CommonJS, so requiring it crashes the Lambda at init.
 
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
 
@@ -41,18 +47,118 @@ const resolveEndUserAudiences = (): string[] => {
   return apiAudience ? [...clientIds, apiAudience] : clientIds;
 };
 
-let cachedIssuer = '';
-let cachedJwks: ReturnType<typeof createRemoteJWKSet> | undefined;
+const base64UrlDecode = (value: string): string => {
+  const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = '='.repeat((4 - (base64.length % 4)) % 4);
 
-const getJwks = (issuer: string): ReturnType<typeof createRemoteJWKSet> => {
-  if (cachedJwks && cachedIssuer === issuer) {
-    return cachedJwks;
+  return Buffer.from(`${base64}${padding}`, 'base64').toString('utf-8');
+};
+
+const parseJwtHeader = (token: string): { kid?: string } => {
+  const [encodedHeader] = token.split('.');
+
+  if (!encodedHeader) {
+    return {};
   }
 
-  cachedIssuer = issuer;
-  cachedJwks = createRemoteJWKSet(new URL(`${issuer}.well-known/jwks.json`));
+  try {
+    const parsed = JSON.parse(base64UrlDecode(encodedHeader)) as Record<string, unknown>;
 
-  return cachedJwks;
+    return { kid: typeof parsed.kid === 'string' ? parsed.kid : undefined };
+  } catch {
+    return {};
+  }
+};
+
+const certToPem = (cert: string): string => {
+  const wrapped = cert.match(/.{1,64}/g)?.join('\n') || cert;
+
+  return `-----BEGIN CERTIFICATE-----\n${wrapped}\n-----END CERTIFICATE-----`;
+};
+
+let cachedIssuer = '';
+let cachedJwksByKid: Map<string, string> | undefined;
+
+const getJwksByKid = async (issuer: string): Promise<Map<string, string>> => {
+  if (cachedJwksByKid && cachedIssuer === issuer) {
+    return cachedJwksByKid;
+  }
+
+  const response = await fetch(`${issuer}.well-known/jwks.json`, {
+    method: 'GET',
+    headers: { accept: 'application/json' },
+  });
+
+  if (!response.ok) {
+    throw new Error(`failed to fetch jwks: ${response.status}`);
+  }
+
+  const payload = (await response.json()) as {
+    keys?: Array<{ kid?: string; x5c?: string[] }>;
+  };
+
+  const keyMap = new Map<string, string>();
+
+  (payload.keys || []).forEach((key) => {
+    if (!key.kid || !Array.isArray(key.x5c) || key.x5c.length === 0) {
+      return;
+    }
+
+    keyMap.set(key.kid, certToPem(String(key.x5c[0])));
+  });
+
+  cachedIssuer = issuer;
+  cachedJwksByKid = keyMap;
+
+  return keyMap;
+};
+
+const verifyEndUserToken = async (
+  token: string,
+  issuer: string,
+  audiences: string[],
+): Promise<Record<string, unknown>> => {
+  const header = parseJwtHeader(token);
+
+  if (!header.kid) {
+    throw new Error('missing kid in token header');
+  }
+
+  const jwksByKid = await getJwksByKid(issuer);
+  const signingKey = jwksByKid.get(header.kid);
+
+  if (!signingKey) {
+    throw new Error('signing key not found for token kid');
+  }
+
+  const verifyOptions: VerifyOptions = {
+    algorithms: ['RS256'] as Algorithm[],
+    issuer,
+    // jsonwebtoken accepts a list and passes when aud matches any entry; its
+    // type is a non-empty tuple, and resolveEndUserAudiences guarantees that.
+    audience: audiences as [string, ...string[]],
+  };
+
+  return new Promise((resolve, reject) => {
+    jwt.verify(
+      token,
+      signingKey,
+      verifyOptions,
+      (error: VerifyErrors | null, decoded?: JwtPayload | string) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        if (!decoded || typeof decoded === 'string') {
+          reject(new Error('invalid JWT payload'));
+          return;
+        }
+
+        resolve(decoded as Record<string, unknown>);
+      },
+    );
+  });
 };
 
 const extractBearerToken = (authorizationHeader?: string): string | undefined => {
@@ -148,13 +254,7 @@ export const requireAuth0EndUser = async (
   let payload: Record<string, unknown>;
 
   try {
-    const verified = await jwtVerify(token, getJwks(issuer), {
-      issuer,
-      audience: audiences,
-      algorithms: ['RS256'],
-    });
-
-    payload = verified.payload as Record<string, unknown>;
+    payload = await verifyEndUserToken(token, issuer, audiences);
   } catch (error) {
     const errorName = error instanceof Error ? error.name : 'UnknownError';
     const errorMessage = error instanceof Error ? error.message : 'unknown error';
