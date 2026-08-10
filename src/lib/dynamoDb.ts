@@ -271,6 +271,30 @@ export const querySimCardsByIccid = async (
     }),
   );
 
+// SIMCards partition key is "SimId" (capital S).
+export const updateSimCardEmail = async (
+  simId: string,
+  email: string,
+  updatedAt: string,
+): Promise<{ Attributes?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new UpdateCommand({
+      TableName: SIM_CARDS_TABLE_NAME,
+      Key: { SimId: simId },
+      UpdateExpression: 'SET #email = :email, #updatedAt = :updatedAt',
+      ConditionExpression: 'attribute_exists(SimId)',
+      ExpressionAttributeNames: {
+        '#email': 'email',
+        '#updatedAt': 'updatedAt',
+      },
+      ExpressionAttributeValues: {
+        ':email': email,
+        ':updatedAt': updatedAt,
+      },
+      ReturnValues: 'ALL_NEW',
+    }),
+  );
+
 // SIMCardInventory partition key is "Iccid" (capital I), stored as a String.
 export const getSimInventoryByIccid = async (
   iccid: string,

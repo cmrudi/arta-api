@@ -37,6 +37,28 @@ export const getAuth0ClientId = (payload?: Record<string, unknown>): string | un
   return undefined;
 };
 
+// Auth0 can't put a bare "email" claim on a machine token, so the tenant action
+// adds it under a namespaced claim — same one the API Gateway authorizer reads.
+const AUTH0_EMAIL_CLAIM = 'https://api.artamobile.id/email';
+
+export const getAuth0Email = (payload?: Record<string, unknown>): string | undefined => {
+  if (!payload) {
+    return undefined;
+  }
+
+  const namespaced = payload[AUTH0_EMAIL_CLAIM];
+
+  if (typeof namespaced === 'string' && namespaced.trim()) {
+    return namespaced.trim();
+  }
+
+  if (typeof payload.email === 'string' && payload.email.trim()) {
+    return payload.email.trim();
+  }
+
+  return undefined;
+};
+
 let cachedIssuer = '';
 let cachedJwksByKid: Map<string, string> | undefined;
 
