@@ -63,7 +63,6 @@ export const validatePromotion = async (
       success: true,
       productCode,
       promoCode,
-      email: result.email,
       price: result.price,
       priceCut: result.priceCut,
       finalPrice: result.finalPrice,

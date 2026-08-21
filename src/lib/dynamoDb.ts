@@ -1,5 +1,6 @@
 import { GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 
+import { PromoCodeRedemptionItem } from '../models/promoCodeRedemption';
 import { dynamoDocClient } from './dynamo';
 
 export const sendDynamoCommand = async <T>(command: unknown): Promise<T> =>
@@ -9,6 +10,7 @@ const ORDERS_TABLE_NAME = 'Order';
 const PRODUCT_MAPPING_TABLE_NAME = 'ProductMapping';
 const REGION_TABLE_NAME = 'Region';
 const PROMO_CODE_TABLE_NAME = 'PromoCode';
+const PROMO_CODE_REDEMPTION_TABLE_NAME = 'PromoCodeRedemption';
 const DISTRIBUTOR_WALLET_TABLE_NAME = 'DistributorWallet';
 const SUPPLIER_COST_TABLE_NAME = 'SupplierCost';
 const SIM_CARDS_TABLE_NAME = 'SIMCards';
@@ -344,6 +346,16 @@ export const getPromoCodeByCode = async (
       Key: {
         code,
       },
+    }),
+  );
+
+export const putPromoCodeRedemption = async (
+  redemption: PromoCodeRedemptionItem,
+): Promise<Record<string, unknown>> =>
+  sendDynamoCommand(
+    new PutCommand({
+      TableName: PROMO_CODE_REDEMPTION_TABLE_NAME,
+      Item: redemption,
     }),
   );
 

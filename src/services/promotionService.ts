@@ -1,6 +1,13 @@
-import { findProductByProductCode, getPromoCodeByCode } from '../lib/dynamoDb';
+import { randomUUID } from 'crypto';
+
+import {
+  findProductByProductCode,
+  getPromoCodeByCode,
+  putPromoCodeRedemption,
+} from '../lib/dynamoDb';
 import { ProductMappingItem } from '../models/productMapping';
 import { PromoCodeItem } from '../models/promoCode';
+import { PromoCodeRedemptionItem } from '../models/promoCodeRedemption';
 
 type ValidatePromoSuccessResult = {
   success: true;
@@ -98,13 +105,39 @@ export const validatePromoByProductCode = async (
 
   const finalPrice = price - priceCut;
 
+  const redemption: PromoCodeRedemptionItem = {
+    redemptionId: randomUUID(),
+    productCode,
+    promoCode,
+    email,
+    price: price * 1000,
+    priceCut: priceCut * 1000,
+    finalPrice: finalPrice * 1000,
+    status: 'INITIATED',
+    createdAt: new Date().toISOString(),
+  };
+
+  // The redemption row is an audit trail, not part of the price answer. Denying
+  // a customer a valid discount because a log write failed would be the worse
+  // outcome, so a failure here is logged and swallowed.
+  try {
+    await putPromoCodeRedemption(redemption);
+  } catch (error) {
+    console.error('[promotion] failed to record promo redemption', {
+      redemptionId: redemption.redemptionId,
+      productCode,
+      promoCode,
+      error: error instanceof Error ? error.message : 'unknown error',
+    });
+  }
+
   return {
     success: true,
     product,
     promo,
     email,
-    price: price * 1000,
-    priceCut: priceCut * 1000,
-    finalPrice: finalPrice * 1000,
+    price: redemption.price,
+    priceCut: redemption.priceCut,
+    finalPrice: redemption.finalPrice,
   };
 };
