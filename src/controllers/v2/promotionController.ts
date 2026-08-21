@@ -1,8 +1,12 @@
 import { Request, Response } from 'express';
 
+import { AuthenticatedLocals, getAuth0Email } from '../../middlewares/auth0BearerAuth';
 import { validatePromoByProductCode } from '../../services/promotionService';
 
-export const validatePromotion = async (req: Request, res: Response): Promise<Response> => {
+export const validatePromotion = async (
+  req: Request,
+  res: Response<unknown, AuthenticatedLocals>,
+): Promise<Response> => {
   const productCode = String(req.params.productCode || '').trim();
   const promoCode = String(req.params.promoCode || '').trim();
 
@@ -13,8 +17,19 @@ export const validatePromotion = async (req: Request, res: Response): Promise<Re
     });
   }
 
+  // requireAuth0EndUser has already verified the token and rejected an unverified
+  // address, so this is the trusted identity of the caller.
+  const email = getAuth0Email(res.locals.auth);
+
+  if (!email) {
+    return res.status(403).json({
+      success: false,
+      message: 'access token does not carry an email claim',
+    });
+  }
+
   try {
-    const result = await validatePromoByProductCode(productCode, promoCode);
+    const result = await validatePromoByProductCode(productCode, promoCode, email);
 
     if (!result.success) {
       if (result.reason === 'PRODUCT_NOT_FOUND') {

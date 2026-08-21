@@ -6,6 +6,10 @@ type ValidatePromoSuccessResult = {
   success: true;
   product: ProductMappingItem;
   promo: PromoCodeItem;
+  // The authenticated caller the promo was validated for. Comes from the Auth0
+  // token via the controller — never from client-supplied input, so it is safe
+  // to key per-user promo rules (maxUsage, allowlists) on it.
+  email: string;
   price: number;
   priceCut: number;
   finalPrice: number;
@@ -42,6 +46,7 @@ const readPromoByCode = async (promoCode: string): Promise<PromoCodeItem | null>
 export const validatePromoByProductCode = async (
   productCode: string,
   promoCode: string,
+  email: string,
 ): Promise<ValidatePromoResult> => {
   const product = await readFirstProductByCode(productCode);
 
@@ -97,6 +102,7 @@ export const validatePromoByProductCode = async (
     success: true,
     product,
     promo,
+    email,
     price: price * 1000,
     priceCut: priceCut * 1000,
     finalPrice: finalPrice * 1000,
