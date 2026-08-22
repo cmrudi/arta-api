@@ -11,6 +11,7 @@ const PRODUCT_MAPPING_TABLE_NAME = 'ProductMapping';
 const REGION_TABLE_NAME = 'Region';
 const PROMO_CODE_TABLE_NAME = 'PromoCode';
 const PROMO_CODE_REDEMPTION_TABLE_NAME = 'PromoCodeRedemption';
+const PROMO_CODE_REDEMPTION_PROMO_STATUS_INDEX = 'promoCode-status-index';
 const DISTRIBUTOR_WALLET_TABLE_NAME = 'DistributorWallet';
 const SUPPLIER_COST_TABLE_NAME = 'SupplierCost';
 const SIM_CARDS_TABLE_NAME = 'SIMCards';
@@ -358,6 +359,49 @@ export const putPromoCodeRedemption = async (
       Item: redemption,
     }),
   );
+
+/**
+ * Total COMPLETED redemptions for a promo code, across all customers — the
+ * figure a promo's maxUsage is measured against.
+ *
+ * A COUNT query still pages at 1MB of scanned data, so this walks every page:
+ * stopping at the first would silently under-count a popular code and let it
+ * overshoot its limit.
+ */
+export const countCompletedRedemptionsByPromoCode = async (
+  promoCode: string,
+): Promise<number> => {
+  let total = 0;
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+
+  do {
+    const page = await sendDynamoCommand<{
+      Count?: number;
+      LastEvaluatedKey?: Record<string, unknown>;
+    }>(
+      new QueryCommand({
+        TableName: PROMO_CODE_REDEMPTION_TABLE_NAME,
+        IndexName: PROMO_CODE_REDEMPTION_PROMO_STATUS_INDEX,
+        KeyConditionExpression: '#promoCode = :promoCode AND #status = :status',
+        ExpressionAttributeNames: {
+          '#promoCode': 'promoCode',
+          '#status': 'status',
+        },
+        ExpressionAttributeValues: {
+          ':promoCode': promoCode,
+          ':status': 'COMPLETED',
+        },
+        Select: 'COUNT',
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+
+    total += page.Count || 0;
+    exclusiveStartKey = page.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  return total;
+};
 
 export const getDistributorWalletByClientId = async (
   distributorId: string,

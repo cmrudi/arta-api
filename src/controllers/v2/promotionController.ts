@@ -46,6 +46,13 @@ export const validatePromotion = async (
         });
       }
 
+      if (result.reason === 'PROMO_USAGE_EXCEEDED') {
+        return res.status(409).json({
+          success: false,
+          message: 'promoCode has reached its maximum usage',
+        });
+      }
+
       if (result.reason === 'PRODUCT_PRICE_INVALID') {
         return res.status(400).json({
           success: false,
@@ -63,6 +70,7 @@ export const validatePromotion = async (
       success: true,
       productCode,
       promoCode,
+      redemptionId: result.redemptionId,
       price: result.price,
       priceCut: result.priceCut,
       finalPrice: result.finalPrice,

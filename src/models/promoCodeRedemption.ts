@@ -1,6 +1,7 @@
-// Validation only opens a redemption; nothing is spent yet. Later lifecycle
-// states (redeemed on payment, expired, cancelled) get added here as they land.
-export type PromoCodeRedemptionStatus = 'INITIATED';
+// Validation only opens a redemption; nothing is spent yet. COMPLETED is what
+// counts against a promo's maxUsage, so only the payment-success path may set
+// it. Further states (expired, cancelled) get added here as they land.
+export type PromoCodeRedemptionStatus = 'INITIATED' | 'COMPLETED';
 
 export type PromoCodeRedemptionItem = {
   redemptionId: string;

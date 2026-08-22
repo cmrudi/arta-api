@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 
 import {
+  countCompletedRedemptionsByPromoCode,
   findProductByProductCode,
   getPromoCodeByCode,
   putPromoCodeRedemption,
@@ -13,6 +14,7 @@ type ValidatePromoSuccessResult = {
   success: true;
   product: ProductMappingItem;
   promo: PromoCodeItem;
+  redemptionId: string;
   // The authenticated caller the promo was validated for. Comes from the Auth0
   // token via the controller — never from client-supplied input, so it is safe
   // to key per-user promo rules (maxUsage, allowlists) on it.
@@ -28,13 +30,34 @@ type ValidatePromoErrorResult = {
     | 'PRODUCT_NOT_FOUND'
     | 'PRODUCT_PRICE_INVALID'
     | 'PROMO_NOT_FOUND'
-    | 'PROMO_INVALID';
+    | 'PROMO_INVALID'
+    | 'PROMO_USAGE_EXCEEDED';
 };
 
 export type ValidatePromoResult = ValidatePromoSuccessResult | ValidatePromoErrorResult;
 
 const normalizeNumber = (value: unknown): number =>
   typeof value === 'number' ? value : Number(String(value));
+
+/**
+ * For fields that are legitimately absent, like maxUsage. Returns null rather
+ * than a number so "no limit" stays distinguishable from a real limit —
+ * normalizeNumber would turn undefined into NaN and, worse, '' into 0, which
+ * would read as a promo nobody may ever use.
+ */
+const readOptionalNumber = (value: unknown): number | null => {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (typeof value === 'string' && !value.trim()) {
+    return null;
+  }
+
+  const parsed = Number(typeof value === 'string' ? value.trim() : value);
+
+  return Number.isFinite(parsed) ? parsed : null;
+};
 
 const readFirstProductByCode = async (productCode: string): Promise<ProductMappingItem | null> => {
   const result = await findProductByProductCode(productCode);
@@ -97,6 +120,21 @@ export const validatePromoByProductCode = async (
     };
   }
 
+  // A promo without maxUsage has no ceiling, so the count is skipped entirely
+  // rather than treated as a limit of zero.
+  const maxUsage = readOptionalNumber(promo.maxUsage);
+
+  if (maxUsage !== null) {
+    const completedCount = await countCompletedRedemptionsByPromoCode(promoCode);
+
+    if (completedCount >= maxUsage) {
+      return {
+        success: false,
+        reason: 'PROMO_USAGE_EXCEEDED',
+      };
+    }
+  }
+
   let priceCut = (price * discountPercentage) / 100;
 
   if (priceCut > maxPriceCut) {
@@ -135,6 +173,7 @@ export const validatePromoByProductCode = async (
     success: true,
     product,
     promo,
+    redemptionId: redemption.redemptionId,
     email,
     price: redemption.price,
     priceCut: redemption.priceCut,
