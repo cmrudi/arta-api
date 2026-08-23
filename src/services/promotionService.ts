@@ -36,6 +36,10 @@ type ValidatePromoErrorResult = {
 
 export type ValidatePromoResult = ValidatePromoSuccessResult | ValidatePromoErrorResult;
 
+// Rupiah. Nothing may be sold for less than this, however generous the promo:
+// a zero-rupiah charge is not something the payment gateway can process.
+const MINIMUM_FINAL_PRICE = 1000;
+
 const normalizeNumber = (value: unknown): number =>
   typeof value === 'number' ? value : Number(String(value));
 
@@ -141,16 +145,29 @@ export const validatePromoByProductCode = async (
     priceCut = maxPriceCut;
   }
 
-  const finalPrice = price - priceCut;
+  const priceAmount = price * 1000;
+  let priceCutAmount = priceCut * 1000;
+
+  // A 100%-discount code on a cheap package would otherwise price the order at
+  // zero, which the payment gateway cannot charge. Trim the discount rather
+  // than the total, so price - priceCut === finalPrice still holds; on a
+  // package already under the floor there is simply nothing to give away.
+  const maximumPriceCut = Math.max(priceAmount - MINIMUM_FINAL_PRICE, 0);
+
+  if (priceCutAmount > maximumPriceCut) {
+    priceCutAmount = maximumPriceCut;
+  }
+
+  const finalPriceAmount = priceAmount - priceCutAmount;
 
   const redemption: PromoCodeRedemptionItem = {
     redemptionId: randomUUID(),
     productCode,
     promoCode,
     email,
-    price: price * 1000,
-    priceCut: priceCut * 1000,
-    finalPrice: finalPrice * 1000,
+    price: priceAmount,
+    priceCut: priceCutAmount,
+    finalPrice: finalPriceAmount,
     status: 'INITIATED',
     createdAt: new Date().toISOString(),
   };
