@@ -12,7 +12,6 @@ export type SubmitReviewInput = {
   simId: string;
   kind: ReviewKind;
   rating?: unknown;
-  installed?: unknown;
   reason?: unknown;
   comment?: unknown;
   /**
@@ -30,7 +29,6 @@ export type SubmitReviewResult =
       reason:
         | 'SIM_NOT_FOUND'
         | 'INVALID_RATING'
-        | 'INVALID_INSTALLED'
         | 'INVALID_REASON';
     };
 
@@ -53,24 +51,12 @@ const str = (value: unknown): string => (typeof value === 'string' ? value.trim(
 export const submitSimReview = async (
   input: SubmitReviewInput,
 ): Promise<SubmitReviewResult> => {
-  // SERVICE answers carry a rating; INSTALL answers carry a boolean.
-  let rating: number | undefined;
-  let installed: boolean | undefined;
+  // Both kinds are a 1-5 rating: INSTALL rates the setup process, SERVICE the
+  // connection.
+  const rating = Number(input.rating);
 
-  if (input.kind === 'SERVICE') {
-    const value = Number(input.rating);
-
-    if (!Number.isInteger(value) || value < MIN_RATING || value > MAX_RATING) {
-      return { success: false, reason: 'INVALID_RATING' };
-    }
-
-    rating = value;
-  } else {
-    if (typeof input.installed !== 'boolean') {
-      return { success: false, reason: 'INVALID_INSTALLED' };
-    }
-
-    installed = input.installed;
+  if (!Number.isInteger(rating) || rating < MIN_RATING || rating > MAX_RATING) {
+    return { success: false, reason: 'INVALID_RATING' };
   }
 
   const reason = str(input.reason);
@@ -98,7 +84,6 @@ export const submitSimReview = async (
     SimId: input.simId,
     kind: input.kind,
     rating,
-    installed,
     email,
     iccid: str(sim.iccid) || undefined,
     orderId: str(sim.orderId) || undefined,

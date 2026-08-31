@@ -8,10 +8,9 @@
 export type SimReviewItem = {
   SimId: string;
   kind: ReviewKind;
-  rating?: number;
-  /** Install answer: did the profile install successfully. */
-  installed?: boolean;
-  /** Optional structured diagnosis. */
+  /** 1-5. INSTALL rates the setup process, SERVICE rates the connection. */
+  rating: number;
+  /** Optional structured diagnosis. Not collected by the app today. */
   reason?: string;
   comment?: string;
   /** Derived server-side from the SIMCards row, never trusted from the client. */
@@ -27,7 +26,7 @@ export type SimReviewItem = {
   updatedAt?: string;
 };
 
-/** SERVICE = how was the connection. INSTALL = did you manage to install it. */
+/** SERVICE = how was the connection. INSTALL = how was the setup process. */
 export const REVIEW_KINDS = ['SERVICE', 'INSTALL'] as const;
 export type ReviewKind = (typeof REVIEW_KINDS)[number];
 

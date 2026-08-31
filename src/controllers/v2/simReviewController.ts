@@ -19,7 +19,6 @@ export const postSimReview = async (
   const body = (req.body || {}) as {
     kind?: unknown;
     rating?: unknown;
-    installed?: unknown;
     reason?: unknown;
     comment?: unknown;
     smdpStatus?: unknown;
@@ -40,7 +39,6 @@ export const postSimReview = async (
       simId,
       kind,
       rating: body.rating,
-      installed: body.installed,
       reason: body.reason,
       comment: body.comment,
       smdpStatus: body.smdpStatus,
@@ -51,13 +49,6 @@ export const postSimReview = async (
         return res.status(400).json({
           success: false,
           message: 'rating must be an integer between 1 and 5',
-        });
-      }
-
-      if (result.reason === 'INVALID_INSTALLED') {
-        return res.status(400).json({
-          success: false,
-          message: 'installed must be a boolean',
         });
       }
 
