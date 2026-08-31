@@ -17,6 +17,7 @@ const SUPPLIER_COST_TABLE_NAME = 'SupplierCost';
 const SIM_CARDS_TABLE_NAME = 'SIMCards';
 const SIM_CARDS_ICCID_INDEX = 'iccid-index';
 const SIM_CARD_INVENTORY_TABLE_NAME = 'SIMCardInventory';
+const SIM_REVIEW_TABLE_NAME = 'SimReview';
 const ORDER_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
 
 export const scanPartnerOrdersByDateRange = async (
@@ -254,6 +255,50 @@ export const storeSim = async (
     new PutCommand({
       TableName: SIM_CARDS_TABLE_NAME,
       Item: sim,
+    }),
+  );
+
+// SIMCards partition key is "SimId" (capital S).
+export const getSimBySimId = async (
+  simId: string,
+): Promise<{ Item?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new GetCommand({
+      TableName: SIM_CARDS_TABLE_NAME,
+      Key: { SimId: simId },
+    }),
+  );
+
+export const getSimReview = async (
+  simId: string,
+  kind: string,
+): Promise<{ Item?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new GetCommand({
+      TableName: SIM_REVIEW_TABLE_NAME,
+      Key: { SimId: simId, kind },
+    }),
+  );
+
+export const querySimReviews = async (
+  simId: string,
+): Promise<{ Items?: Record<string, unknown>[] }> =>
+  sendDynamoCommand(
+    new QueryCommand({
+      TableName: SIM_REVIEW_TABLE_NAME,
+      KeyConditionExpression: '#SimId = :simId',
+      ExpressionAttributeNames: { '#SimId': 'SimId' },
+      ExpressionAttributeValues: { ':simId': simId },
+    }),
+  );
+
+export const putSimReview = async (
+  review: Record<string, unknown>,
+): Promise<Record<string, unknown>> =>
+  sendDynamoCommand(
+    new PutCommand({
+      TableName: SIM_REVIEW_TABLE_NAME,
+      Item: review,
     }),
   );
 
