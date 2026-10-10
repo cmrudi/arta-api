@@ -1,6 +1,14 @@
-import { GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  ScanCommand,
+  TransactWriteCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 
 import { PromoCodeRedemptionItem } from '../models/promoCodeRedemption';
+import { RefundEvent, RefundItem, RefundStatus } from '../models/refund';
 import { dynamoDocClient } from './dynamo';
 
 export const sendDynamoCommand = async <T>(command: unknown): Promise<T> =>
@@ -19,6 +27,8 @@ const SIM_CARDS_ICCID_INDEX = 'iccid-index';
 const SIM_CARD_INVENTORY_TABLE_NAME = 'SIMCardInventory';
 const SIM_REVIEW_TABLE_NAME = 'SimReview';
 const ORDER_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
+const REFUND_TABLE_NAME = 'Refund';
+const REFUND_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
 
 export const scanPartnerOrdersByDateRange = async (
   startDate: string,
@@ -503,3 +513,165 @@ export const increaseDistributorWalletBalance = async (
       ReturnValues: 'UPDATED_NEW',
     }),
   );
+
+/**
+ * Store a new refund and claim the order for it in one transaction. The
+ * condition on the Order row is what makes "one refund per order" hold even
+ * when two requests race.
+ */
+export const createRefundForOrder = async (refund: RefundItem): Promise<void> => {
+  await sendDynamoCommand(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Put: {
+            TableName: REFUND_TABLE_NAME,
+            Item: refund,
+            ConditionExpression: 'attribute_not_exists(refundId)',
+          },
+        },
+        {
+          Update: {
+            TableName: ORDERS_TABLE_NAME,
+            Key: { orderId: refund.orderId },
+            UpdateExpression: 'SET #refundId = :refundId, #refundStatus = :refundStatus',
+            ConditionExpression: 'attribute_exists(orderId) AND attribute_not_exists(#refundId)',
+            ExpressionAttributeNames: {
+              '#refundId': 'refundId',
+              '#refundStatus': 'refundStatus',
+            },
+            ExpressionAttributeValues: {
+              ':refundId': refund.refundId,
+              ':refundStatus': refund.status,
+            },
+          },
+        },
+      ],
+    }),
+  );
+};
+
+export const getRefundById = async (
+  refundId: string,
+): Promise<{ Item?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new GetCommand({
+      TableName: REFUND_TABLE_NAME,
+      Key: { refundId },
+    }),
+  );
+
+// Oldest first, so the request closest to its deadline is at the top.
+export const queryRefundsByStatus = async (
+  status: RefundStatus,
+): Promise<Record<string, unknown>[]> => {
+  const items: Record<string, unknown>[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+
+  do {
+    const page = await sendDynamoCommand<{
+      Items?: Record<string, unknown>[];
+      LastEvaluatedKey?: Record<string, unknown>;
+    }>(
+      new QueryCommand({
+        TableName: REFUND_TABLE_NAME,
+        IndexName: REFUND_STATUS_CREATED_AT_INDEX,
+        KeyConditionExpression: '#status = :status',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':status': status },
+        ScanIndexForward: true,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+
+    items.push(...(page.Items || []));
+    exclusiveStartKey = page.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  return items;
+};
+
+/**
+ * Move a refund from one of `from` to `to`, record the event, and mirror the
+ * new status onto the Order row - all in one transaction. Throws
+ * TransactionCanceledException when the refund is no longer in `from`, which
+ * is how a double-click on "approve" becomes a no-op instead of a second
+ * cancellation.
+ */
+export const transitionRefund = async (params: {
+  refundId: string;
+  orderId: string;
+  from: readonly RefundStatus[];
+  to: RefundStatus;
+  event: RefundEvent;
+  set?: Record<string, unknown>;
+  incrementRetry?: boolean;
+}): Promise<void> => {
+  const names: Record<string, string> = {
+    '#status': 'status',
+    '#updatedAt': 'updatedAt',
+    '#events': 'events',
+  };
+  const values: Record<string, unknown> = {
+    ':to': params.to,
+    ':updatedAt': params.event.at,
+    ':event': [params.event],
+    ':empty': [],
+  };
+  const assignments = [
+    '#status = :to',
+    '#updatedAt = :updatedAt',
+    '#events = list_append(if_not_exists(#events, :empty), :event)',
+  ];
+
+  Object.entries(params.set || {}).forEach(([key, value], index) => {
+    names[`#f${index}`] = key;
+    values[`:v${index}`] = value;
+    assignments.push(`#f${index} = :v${index}`);
+  });
+
+  if (params.incrementRetry) {
+    names['#retryCount'] = 'retryCount';
+    values[':zero'] = 0;
+    values[':one'] = 1;
+    assignments.push('#retryCount = if_not_exists(#retryCount, :zero) + :one');
+  }
+
+  const fromKeys = params.from.map((status, index) => {
+    values[`:from${index}`] = status;
+    return `:from${index}`;
+  });
+
+  await sendDynamoCommand(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: REFUND_TABLE_NAME,
+            Key: { refundId: params.refundId },
+            UpdateExpression: `SET ${assignments.join(', ')}`,
+            ConditionExpression: `#status IN (${fromKeys.join(', ')})`,
+            ExpressionAttributeNames: names,
+            ExpressionAttributeValues: values,
+          },
+        },
+        {
+          Update: {
+            TableName: ORDERS_TABLE_NAME,
+            Key: { orderId: params.orderId },
+            UpdateExpression: 'SET #refundStatus = :to',
+            ConditionExpression: '#refundId = :refundId',
+            ExpressionAttributeNames: {
+              '#refundStatus': 'refundStatus',
+              '#refundId': 'refundId',
+            },
+            ExpressionAttributeValues: {
+              ':to': params.to,
+              ':refundId': params.refundId,
+            },
+          },
+        },
+      ],
+    }),
+  );
+};
