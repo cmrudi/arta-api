@@ -56,3 +56,39 @@ export const sendInternalOrderConfirm = async (
     throw new Error(`Brevo API failed (status ${response.status}): ${body.slice(0, 200)}`);
   }
 };
+
+/**
+ * Sends one transactional email from a Brevo template. The template owns the
+ * sender, subject and layout, as with the eSIM delivery email (templateId 1);
+ * `params` fill its {{ params.* }} placeholders.
+ */
+export const sendBrevoTemplateEmail = async (params: {
+  to: string;
+  templateId: number;
+  params: Record<string, unknown>;
+}): Promise<void> => {
+  const apiKey = process.env.BREVO_API_KEY;
+
+  if (!apiKey) {
+    throw new Error('BREVO_API_KEY is not configured');
+  }
+
+  const response = await fetch(BREVO_SEND_EMAIL_URL, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'api-key': apiKey,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      to: [{ email: params.to }],
+      templateId: params.templateId,
+      params: params.params,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Brevo API failed (status ${response.status}): ${body.slice(0, 200)}`);
+  }
+};
