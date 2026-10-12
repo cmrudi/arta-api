@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ params.subject }}</title>
+</head>
+<body style="margin:0;padding:0;background:#fafafa;font-family:'Plus Jakarta Sans',Arial,sans-serif;color:#1f1f1f;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fafafa;">
+<tr><td align="center" style="padding:24px 16px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border:1px solid #f0f0f0;border-radius:14px;">
+<tr><td align="center" style="padding:24px 24px 0;">
+<img src="https://img.mailinblue.com/8680492/images/content_library/original/67b4d7ddd4cf910f0aa5bf58.png" width="160" alt="Arta Mobile" style="display:block;width:160px;max-width:100%;height:auto;border:0;">
+</td></tr>
+
+<!-- Heading + intro -->
+<tr><td style="padding:20px 24px 0;">
+{% if params.isReceived %}
+<h1 style="margin:0 0 8px;font-size:22px;line-height:30px;">Pengajuan refund diterima</h1>
+<p style="margin:0;font-size:15px;line-height:24px;color:#434343;">Kami sudah menerima pengajuan refund untuk eSIM <b>{{ params.region }}</b>. Tim CS akan meninjaunya maksimal <b>{{ params.reviewSla }}</b>.</p>
+{% endif %}
+{% if params.isRejected %}
+<h1 style="margin:0 0 8px;font-size:22px;line-height:30px;">Pengajuan refund ditolak</h1>
+<p style="margin:0;font-size:15px;line-height:24px;color:#434343;">Maaf, pengajuan refund <b>{{ params.refundId }}</b> untuk eSIM <b>{{ params.region }}</b> tidak bisa kami setujui.</p>
+{% endif %}
+{% if params.isCompleted %}
+<h1 style="margin:0 0 8px;font-size:22px;line-height:30px;">Refund selesai</h1>
+<p style="margin:0;font-size:15px;line-height:24px;color:#434343;">Dana sebesar <b>{{ params.amount }}</b> untuk eSIM <b>{{ params.region }}</b> sudah kami kembalikan.</p>
+{% endif %}
+</td></tr>
+
+<!-- Detail box: grey while waiting, red with the reason when rejected, green when done -->
+<tr><td style="padding:20px 24px 0;">
+{% if params.isRejected %}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff1f0;border:1px solid #ffccc7;border-radius:12px;">
+<tr><td style="padding:14px 16px;font-size:14px;line-height:22px;color:#434343;"><b style="color:#a8071a;">Alasan</b><br>{{ params.rejectReason }}</td></tr>
+</table>
+{% else %}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="{% if params.isCompleted %}background:#f6ffed;border:1px solid #b7eb8f;{% else %}background:#fafafa;{% endif %}border-radius:12px;font-size:14px;line-height:22px;">
+<tr><td style="padding:14px 16px 4px;color:#595959;">ID refund</td><td align="right" style="padding:14px 16px 4px;font-weight:700;">{{ params.refundId }}</td></tr>
+<tr><td style="padding:4px 16px;color:#595959;">Jumlah</td><td align="right" style="padding:4px 16px;font-weight:700;">{{ params.amount }}</td></tr>
+<tr><td style="padding:4px 16px;color:#595959;">Dikembalikan ke</td><td align="right" style="padding:4px 16px;">{% if params.manualRefund %}Transfer dari tim CS{% else %}{{ params.paymentMethod }}{% endif %}</td></tr>
+{% if params.isCompleted %}
+<tr><td style="padding:4px 16px 14px;color:#595959;">Diproses</td><td align="right" style="padding:4px 16px 14px;">{{ params.refundedAt }}</td></tr>
+{% else %}
+<tr><td style="padding:4px 16px 14px;color:#595959;">Diajukan</td><td align="right" style="padding:4px 16px 14px;">{{ params.requestedAt }}</td></tr>
+{% endif %}
+</table>
+{% endif %}
+</td></tr>
+
+<!-- What happens next -->
+<tr><td style="padding:16px 24px 0;font-size:14px;line-height:22px;color:#434343;">
+{% if params.isReceived %}eSIM masih bisa dipakai selama ditinjau. Jika disetujui, eSIM akan dinonaktifkan dan dana dikembalikan otomatis ke metode pembayaran asal, tanpa perlu mengisi data rekening.{% endif %}
+{% if params.isRejected %}eSIM kamu tetap aktif dan bisa dipakai seperti biasa. Kalau menurutmu ada yang keliru, hubungi CS lewat WhatsApp dan sebutkan ID refund di atas.{% endif %}
+{% if params.isCompleted %}{% if params.manualRefund %}Dana dikirim langsung oleh tim CS kami.{% else %}Waktu dana masuk tergantung bank atau e-wallet kamu, biasanya beberapa hari kerja.{% endif %} eSIM ini sudah dinonaktifkan dan tidak bisa dipakai lagi.{% endif %}
+</td></tr>
+
+<!-- Buttons: rejected leads with CS, the others with the status page -->
+<tr><td style="padding:24px;">
+{% if params.isRejected %}
+<a href="{{ params.csUrl }}" style="display:block;text-align:center;background:#237804;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:14px 16px;border-radius:12px;">Chat CS via WhatsApp</a>
+<a href="{{ params.statusUrl }}" style="display:block;text-align:center;color:#237804;font-weight:700;font-size:14px;padding:14px 16px 0;">Lihat status refund</a>
+{% else %}
+<a href="{{ params.statusUrl }}" style="display:block;text-align:center;background:#237804;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:14px 16px;border-radius:12px;">Lihat status refund</a>
+{% endif %}
+</td></tr>
+</table>
+
+{% if params.isRejected %}{% else %}
+<p style="max-width:520px;margin:16px auto 0;font-size:12px;line-height:18px;color:#595959;text-align:center;">
+{% if params.isCompleted %}Dana belum masuk setelah 7 hari kerja?{% else %}Butuh bantuan?{% endif %} <a href="{{ params.csUrl }}" style="color:#237804;">Chat CS via WhatsApp</a>
+</p>
+{% endif %}
+
+<!-- Footer: same company block as the eSIM delivery email (template 1) -->
+<p style="max-width:520px;margin:24px auto 0;font-size:13px;line-height:20px;color:#595959;text-align:center;">
+<b style="color:#434343;">PT Aigov Teknologi Asia</b><br>
+contact@artamobile.id · +62 823 57509078<br>
+<a href="https://shop.artamobile.id/" style="color:#595959;">shop.artamobile.id</a> · <a href="https://www.instagram.com/artamobile.id/" style="color:#595959;">@artamobile.id</a>
+</p>
+</td></tr>
+</table>
+</body>
+</html>

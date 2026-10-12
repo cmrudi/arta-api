@@ -18,6 +18,7 @@ import {
   isRefundReason,
 } from '../models/refund';
 import { requestMidtransRefund } from './midtransService';
+import { sendRefundEmail } from './refundEmailService';
 
 const lambdaClient = new LambdaClient({});
 
@@ -292,6 +293,8 @@ export const createRefundRequest = async (input: {
     throw error;
   }
 
+  await sendRefundEmail('RECEIVED', refund);
+
   return { success: true, refund: toCustomerView(refund) };
 };
 
@@ -367,11 +370,18 @@ const runGatewayStep = async (refund: Record<string, unknown>, actor: string): P
     });
 
     if (result.success) {
-      await tryTransition(refund, ['ESIM_CANCELLED'], 'REFUNDED', actor, {
+      const completed = {
         refundedAt: new Date().toISOString(),
-        gatewayResponse: result.response,
         ...(result.paymentType ? { paymentType: result.paymentType } : {}),
+      };
+      const moved = await tryTransition(refund, ['ESIM_CANCELLED'], 'REFUNDED', actor, {
+        ...completed,
+        gatewayResponse: result.response,
       });
+
+      if (moved) {
+        await sendRefundEmail('COMPLETED', { ...refund, ...completed, status: 'REFUNDED' });
+      }
       return;
     }
 
@@ -476,7 +486,17 @@ export const rejectRefund = async (
     { note: reason },
   );
 
-  return rejected ? reload(refundId) : { success: false, reason: 'INVALID_STATE', status: str(refund.status) };
+  if (!rejected) {
+    return { success: false, reason: 'INVALID_STATE', status: str(refund.status) };
+  }
+
+  const result = await reload(refundId);
+
+  if (result.success) {
+    await sendRefundEmail('REJECTED', result.refund);
+  }
+
+  return result;
 };
 
 const isStuck = (refund: Record<string, unknown>): boolean =>
@@ -566,5 +586,15 @@ export const completeRefundManually = async (
     { note: str(note) || 'refunded manually' },
   );
 
-  return moved ? reload(refundId) : { success: false, reason: 'INVALID_STATE', status: str(refund.status) };
+  if (!moved) {
+    return { success: false, reason: 'INVALID_STATE', status: str(refund.status) };
+  }
+
+  const result = await reload(refundId);
+
+  if (result.success) {
+    await sendRefundEmail('COMPLETED', result.refund);
+  }
+
+  return result;
 };
