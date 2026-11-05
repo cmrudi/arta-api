@@ -121,6 +121,53 @@ Rules:
 	- update Order status to `PAID`
 	- invoke one Lambda asynchronously based on order type + provider
 
+### Partner Payouts (v2)
+
+Semi-automated payouts for affiliate partners. Finance credits each partner's
+balance by hand (from the profit-sharing sheet); the partner requests a
+withdrawal in the partner portal; finance transfers the money by bank and marks
+it paid with the transfer reference. Every balance change is a ledger entry, and
+the wallet, ledger and withdrawal rows are always written in one transaction.
+
+Lifecycle: `PENDING_REVIEW` → `APPROVED` → `PAID`. `PENDING_REVIEW` can go
+straight to `PAID`. `PENDING_REVIEW`/`APPROVED` → `REJECTED`, or the partner
+cancels while `PENDING_REVIEW` (`CANCELLED`); both return the amount to the
+balance. A partner has at most one open withdrawal.
+
+Partner routes (the portal's own Auth0 token; the wallet is the one for the
+token's email claim):
+
+- `GET /v2/partner/wallet` - balance, amount on hold, minimum, open withdrawal, history
+- `POST /v2/partner/withdrawals` - `{ "amount": 750000, "bankAccount": { "bankName": "BCA", "accountNumber": "1234567890", "accountName": "Budi Santoso" }, "note": "optional" }`
+- `POST /v2/partner/withdrawals/:withdrawalId/cancel`
+
+Finance routes (arta-admin access token with the Auth0 `finance` role):
+
+- `GET /v2/admin/partner-wallets`
+- `GET /v2/admin/partner-wallets/:email` - wallet with ledger and withdrawals
+- `POST /v2/admin/partner-wallets/adjustments` - `{ "email": "budi@example.com", "type": "CREDIT" | "DEBIT", "amount": 750000, "note": "Komisi Oktober 2026", "entryId": "<uuid>", "partnerKey": "budi", "partnerName": "Budi" }`. `entryId` makes a retried submit a no-op (409 `DUPLICATE_ENTRY`); the first credit creates the wallet.
+- `GET /v2/admin/partner-withdrawals?status=PENDING_REVIEW,APPROVED` (default: open ones)
+- `GET /v2/admin/partner-withdrawals/:withdrawalId`
+- `POST /v2/admin/partner-withdrawals/:withdrawalId/approve`
+- `POST /v2/admin/partner-withdrawals/:withdrawalId/reject` - `{ "reason": "..." }` (sent to the partner)
+- `POST /v2/admin/partner-withdrawals/:withdrawalId/pay` - `{ "transferReference": "...", "note": "optional" }`
+
+DynamoDB tables (on-demand capacity is fine):
+
+| Table | Key | Global secondary indexes |
+|---|---|---|
+| `PartnerWallet` | `email` (S) | - |
+| `PartnerLedger` | `entryId` (S) | `email-createdAt-index`: `email` (S) + `createdAt` (S), projection ALL |
+| `PartnerWithdrawal` | `withdrawalId` (S) | `status-createdAt-index`: `status` (S) + `createdAt` (S); `email-createdAt-index`: `email` (S) + `createdAt` (S); both projection ALL |
+
+The Lambda role needs `GetItem`, `PutItem`, `UpdateItem`, `Query`, `Scan` and
+`TransactWriteItems` on these tables and their indexes.
+
+Environment:
+
+- `PARTNER_MIN_WITHDRAWAL` - minimum withdrawal in IDR (default `500000`)
+- `BREVO_PARTNER_PAYOUT_TEMPLATE_ID`, `PARTNER_PAYOUT_OPS_EMAIL`, `PARTNER_PORTAL_URL` - see `templates/brevo/README.md`
+
 ### Product Mappings (v2)
 
 - `GET /v2/products`

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ params.subject }}</title>
+</head>
+<body style="margin:0;padding:0;background:#fafafa;font-family:'Plus Jakarta Sans',Arial,sans-serif;color:#1f1f1f;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fafafa;">
+<tr><td align="center" style="padding:24px 16px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border:1px solid #f0f0f0;border-radius:14px;">
+<tr><td align="center" style="padding:24px 24px 0;">
+<img src="https://img.mailinblue.com/8680492/images/content_library/original/67b4d7ddd4cf910f0aa5bf58.png" width="160" alt="Arta Mobile" style="display:block;width:160px;max-width:100%;height:auto;border:0;">
+</td></tr>
+
+<!-- Heading + intro -->
+<tr><td style="padding:20px 24px 0;">
+{% if params.isRequested %}
+<h1 style="margin:0 0 8px;font-size:22px;line-height:30px;">Pengajuan pencairan diterima</h1>
+<p style="margin:0;font-size:15px;line-height:24px;color:#434343;">Kami sudah menerima pengajuan pencairan saldo mitra sebesar <b>{{ params.amount }}</b>. Tim finance Arta akan meninjau dan mentransfernya ke rekening di bawah.</p>
+{% endif %}
+{% if params.isPaid %}
+<h1 style="margin:0 0 8px;font-size:22px;line-height:30px;">Pencairan sudah ditransfer</h1>
+<p style="margin:0;font-size:15px;line-height:24px;color:#434343;">Dana sebesar <b>{{ params.amount }}</b> sudah kami transfer ke rekening kamu. Terima kasih sudah menjadi mitra Arta Mobile!</p>
+{% endif %}
+{% if params.isRejected %}
+<h1 style="margin:0 0 8px;font-size:22px;line-height:30px;">Pengajuan pencairan ditolak</h1>
+<p style="margin:0;font-size:15px;line-height:24px;color:#434343;">Maaf, pengajuan pencairan <b>{{ params.withdrawalId }}</b> belum bisa kami proses. Saldo <b>{{ params.amount }}</b> sudah dikembalikan ke akun mitra kamu.</p>
+{% endif %}
+</td></tr>
+
+<!-- Reason when rejected -->
+{% if params.isRejected %}
+<tr><td style="padding:20px 24px 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff1f0;border:1px solid #ffccc7;border-radius:12px;">
+<tr><td style="padding:14px 16px;font-size:14px;line-height:22px;color:#434343;"><b style="color:#a8071a;">Alasan</b><br>{{ params.rejectReason }}</td></tr>
+</table>
+</td></tr>
+{% endif %}
+
+<!-- Detail box: grey while waiting, green when paid -->
+<tr><td style="padding:20px 24px 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="{% if params.isPaid %}background:#f6ffed;border:1px solid #b7eb8f;{% else %}background:#fafafa;{% endif %}border-radius:12px;font-size:14px;line-height:22px;">
+<tr><td style="padding:14px 16px 4px;color:#595959;">ID pencairan</td><td align="right" style="padding:14px 16px 4px;font-weight:700;">{{ params.withdrawalId }}</td></tr>
+<tr><td style="padding:4px 16px;color:#595959;">Jumlah</td><td align="right" style="padding:4px 16px;font-weight:700;">{{ params.amount }}</td></tr>
+<tr><td style="padding:4px 16px;color:#595959;">Bank</td><td align="right" style="padding:4px 16px;">{{ params.bankName }} {{ params.accountNumber }}</td></tr>
+<tr><td style="padding:4px 16px;color:#595959;">Atas nama</td><td align="right" style="padding:4px 16px;">{{ params.accountName }}</td></tr>
+{% if params.isPaid %}
+<tr><td style="padding:4px 16px;color:#595959;">Ditransfer</td><td align="right" style="padding:4px 16px;">{{ params.paidAt }}</td></tr>
+<tr><td style="padding:4px 16px 14px;color:#595959;">No. referensi</td><td align="right" style="padding:4px 16px 14px;">{{ params.transferReference }}</td></tr>
+{% else %}
+<tr><td style="padding:4px 16px 14px;color:#595959;">Diajukan</td><td align="right" style="padding:4px 16px 14px;">{{ params.requestedAt }}</td></tr>
+{% endif %}
+</table>
+</td></tr>
+
+<!-- What happens next -->
+<tr><td style="padding:16px 24px 0;font-size:14px;line-height:22px;color:#434343;">
+{% if params.isRequested %}Selama diproses, saldo ini ditahan dan tidak bisa dicairkan dua kali. Kamu masih bisa membatalkan pengajuan dari portal mitra sebelum disetujui.{% endif %}
+{% if params.isPaid %}Waktu dana masuk tergantung bank tujuan. Kalau dana belum masuk, hubungi kami dan sebutkan nomor referensi di atas.{% endif %}
+{% if params.isRejected %}Perbaiki data yang disebutkan di atas, lalu ajukan pencairan lagi dari portal mitra.{% endif %}
+</td></tr>
+
+<tr><td style="padding:24px;">
+<a href="{{ params.portalUrl }}" style="display:block;text-align:center;background:#237804;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:14px 16px;border-radius:12px;">Buka portal mitra</a>
+<a href="{{ params.csUrl }}" style="display:block;text-align:center;color:#237804;font-weight:700;font-size:14px;padding:14px 16px 0;">Chat tim mitra via WhatsApp</a>
+</td></tr>
+</table>
+
+<p style="max-width:520px;margin:16px auto 0;font-size:12px;line-height:18px;color:#8c8c8c;text-align:center;">
+Mitra: {{ params.partnerEmail }}{% if params.partnerKey %} · go.artamobile.id/{{ params.partnerKey }}{% endif %}
+</p>
+
+<!-- Footer: same company block as the other transactional emails -->
+<p style="max-width:520px;margin:24px auto 0;font-size:13px;line-height:20px;color:#595959;text-align:center;">
+<b style="color:#434343;">PT Aigov Teknologi Asia</b><br>
+contact@artamobile.id · +62 823 57509078<br>
+<a href="https://shop.artamobile.id/" style="color:#595959;">shop.artamobile.id</a> · <a href="https://www.instagram.com/artamobile.id/" style="color:#595959;">@artamobile.id</a>
+</p>
+</td></tr>
+</table>
+</body>
+</html>

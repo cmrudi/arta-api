@@ -7,6 +7,13 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 
+import {
+  PartnerBankAccount,
+  PartnerLedgerEntry,
+  PartnerWithdrawal,
+  WithdrawalEvent,
+  WithdrawalStatus,
+} from '../models/partnerPayout';
 import { PromoCodeRedemptionItem } from '../models/promoCodeRedemption';
 import { RefundEvent, RefundItem, RefundStatus } from '../models/refund';
 import { dynamoDocClient } from './dynamo';
@@ -29,6 +36,12 @@ const SIM_REVIEW_TABLE_NAME = 'SimReview';
 const ORDER_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
 const REFUND_TABLE_NAME = 'Refund';
 const REFUND_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
+const PARTNER_WALLET_TABLE_NAME = 'PartnerWallet';
+const PARTNER_LEDGER_TABLE_NAME = 'PartnerLedger';
+const PARTNER_LEDGER_EMAIL_CREATED_AT_INDEX = 'email-createdAt-index';
+const PARTNER_WITHDRAWAL_TABLE_NAME = 'PartnerWithdrawal';
+const PARTNER_WITHDRAWAL_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
+const PARTNER_WITHDRAWAL_EMAIL_CREATED_AT_INDEX = 'email-createdAt-index';
 
 export const scanPartnerOrdersByDateRange = async (
   startDate: string,
@@ -674,4 +687,360 @@ export const transitionRefund = async (params: {
       ],
     }),
   );
+};
+
+// ---------------------------------------------------------------------------
+// Partner payouts. See models/partnerPayout.ts for the table layout. Every
+// write that moves money is one transaction over the wallet, the ledger entry
+// and (for withdrawals) the withdrawal row.
+
+export const getPartnerWallet = async (
+  email: string,
+): Promise<{ Item?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new GetCommand({
+      TableName: PARTNER_WALLET_TABLE_NAME,
+      Key: { email },
+    }),
+  );
+
+export const scanPartnerWallets = async (): Promise<Record<string, unknown>[]> => {
+  const items: Record<string, unknown>[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+
+  do {
+    const page = await sendDynamoCommand<{
+      Items?: Record<string, unknown>[];
+      LastEvaluatedKey?: Record<string, unknown>;
+    }>(
+      new ScanCommand({
+        TableName: PARTNER_WALLET_TABLE_NAME,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+
+    items.push(...(page.Items || []));
+    exclusiveStartKey = page.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  return items;
+};
+
+// Newest first, capped: the portal and the admin sheet show recent history.
+export const queryPartnerLedgerByEmail = async (
+  email: string,
+  limit: number,
+): Promise<Record<string, unknown>[]> => {
+  const page = await sendDynamoCommand<{ Items?: Record<string, unknown>[] }>(
+    new QueryCommand({
+      TableName: PARTNER_LEDGER_TABLE_NAME,
+      IndexName: PARTNER_LEDGER_EMAIL_CREATED_AT_INDEX,
+      KeyConditionExpression: '#email = :email',
+      ExpressionAttributeNames: { '#email': 'email' },
+      ExpressionAttributeValues: { ':email': email },
+      ScanIndexForward: false,
+      Limit: limit,
+    }),
+  );
+
+  return page.Items || [];
+};
+
+/**
+ * Finance posts a CREDIT (amount > 0) or DEBIT (amount < 0). The first credit
+ * creates the wallet. A debit may not take the available balance below zero.
+ * The ledger entry's entryId comes from the admin client, so a resubmitted
+ * request fails the attribute_not_exists condition instead of paying twice.
+ */
+export const adjustPartnerWallet = async (params: {
+  entry: PartnerLedgerEntry;
+  partnerKey?: string;
+  partnerName?: string;
+}): Promise<void> => {
+  const { entry } = params;
+  const names: Record<string, string> = {
+    '#balance': 'balance',
+    '#onHold': 'onHold',
+    '#totalCredited': 'totalCredited',
+    '#totalPaidOut': 'totalPaidOut',
+    '#createdAt': 'createdAt',
+    '#updatedAt': 'updatedAt',
+  };
+  const values: Record<string, unknown> = {
+    ':amt': entry.amount,
+    ':zero': 0,
+    ':now': entry.createdAt,
+  };
+  const assignments = [
+    '#balance = if_not_exists(#balance, :zero) + :amt',
+    '#totalCredited = if_not_exists(#totalCredited, :zero) + :amt',
+    '#onHold = if_not_exists(#onHold, :zero)',
+    '#totalPaidOut = if_not_exists(#totalPaidOut, :zero)',
+    '#createdAt = if_not_exists(#createdAt, :now)',
+    '#updatedAt = :now',
+  ];
+
+  if (params.partnerKey) {
+    names['#partnerKey'] = 'partnerKey';
+    values[':partnerKey'] = params.partnerKey;
+    assignments.push('#partnerKey = :partnerKey');
+  }
+
+  if (params.partnerName) {
+    names['#partnerName'] = 'partnerName';
+    values[':partnerName'] = params.partnerName;
+    assignments.push('#partnerName = :partnerName');
+  }
+
+  let condition: string | undefined;
+
+  if (entry.amount < 0) {
+    values[':debit'] = -entry.amount;
+    condition = 'attribute_exists(#balance) AND #balance >= :debit';
+  }
+
+  await sendDynamoCommand(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Put: {
+            TableName: PARTNER_LEDGER_TABLE_NAME,
+            Item: entry,
+            ConditionExpression: 'attribute_not_exists(entryId)',
+          },
+        },
+        {
+          Update: {
+            TableName: PARTNER_WALLET_TABLE_NAME,
+            Key: { email: entry.email },
+            UpdateExpression: `SET ${assignments.join(', ')}`,
+            ...(condition ? { ConditionExpression: condition } : {}),
+            ExpressionAttributeNames: names,
+            ExpressionAttributeValues: values,
+          },
+        },
+      ],
+    }),
+  );
+};
+
+/**
+ * Move the amount from `balance` to `onHold`, mark the wallet as having an open
+ * withdrawal, and store the request. Fails the condition when the balance is
+ * short or another withdrawal is still open.
+ */
+export const createPartnerWithdrawal = async (params: {
+  withdrawal: PartnerWithdrawal;
+  entry: PartnerLedgerEntry;
+}): Promise<void> => {
+  const { withdrawal, entry } = params;
+
+  await sendDynamoCommand(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: PARTNER_WALLET_TABLE_NAME,
+            Key: { email: withdrawal.email },
+            UpdateExpression:
+              'SET #balance = #balance - :amt, #onHold = if_not_exists(#onHold, :zero) + :amt, ' +
+              '#openWithdrawalId = :id, #bankAccount = :bank, #updatedAt = :now',
+            ConditionExpression:
+              'attribute_exists(#balance) AND #balance >= :amt AND attribute_not_exists(#openWithdrawalId)',
+            ExpressionAttributeNames: {
+              '#balance': 'balance',
+              '#onHold': 'onHold',
+              '#openWithdrawalId': 'openWithdrawalId',
+              '#bankAccount': 'bankAccount',
+              '#updatedAt': 'updatedAt',
+            },
+            ExpressionAttributeValues: {
+              ':amt': withdrawal.amount,
+              ':zero': 0,
+              ':id': withdrawal.withdrawalId,
+              ':bank': withdrawal.bankAccount as PartnerBankAccount,
+              ':now': withdrawal.createdAt,
+            },
+          },
+        },
+        {
+          Put: {
+            TableName: PARTNER_WITHDRAWAL_TABLE_NAME,
+            Item: withdrawal,
+            ConditionExpression: 'attribute_not_exists(withdrawalId)',
+          },
+        },
+        {
+          Put: {
+            TableName: PARTNER_LEDGER_TABLE_NAME,
+            Item: entry,
+            ConditionExpression: 'attribute_not_exists(entryId)',
+          },
+        },
+      ],
+    }),
+  );
+};
+
+export const getPartnerWithdrawalById = async (
+  withdrawalId: string,
+): Promise<{ Item?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new GetCommand({
+      TableName: PARTNER_WITHDRAWAL_TABLE_NAME,
+      Key: { withdrawalId },
+    }),
+  );
+
+// Oldest first, so the request waiting longest is at the top of the queue.
+export const queryPartnerWithdrawalsByStatus = async (
+  status: WithdrawalStatus,
+): Promise<Record<string, unknown>[]> => {
+  const items: Record<string, unknown>[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+
+  do {
+    const page = await sendDynamoCommand<{
+      Items?: Record<string, unknown>[];
+      LastEvaluatedKey?: Record<string, unknown>;
+    }>(
+      new QueryCommand({
+        TableName: PARTNER_WITHDRAWAL_TABLE_NAME,
+        IndexName: PARTNER_WITHDRAWAL_STATUS_CREATED_AT_INDEX,
+        KeyConditionExpression: '#status = :status',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':status': status },
+        ScanIndexForward: true,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+
+    items.push(...(page.Items || []));
+    exclusiveStartKey = page.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  return items;
+};
+
+// Newest first, capped, for the partner's own history.
+export const queryPartnerWithdrawalsByEmail = async (
+  email: string,
+  limit: number,
+): Promise<Record<string, unknown>[]> => {
+  const page = await sendDynamoCommand<{ Items?: Record<string, unknown>[] }>(
+    new QueryCommand({
+      TableName: PARTNER_WITHDRAWAL_TABLE_NAME,
+      IndexName: PARTNER_WITHDRAWAL_EMAIL_CREATED_AT_INDEX,
+      KeyConditionExpression: '#email = :email',
+      ExpressionAttributeNames: { '#email': 'email' },
+      ExpressionAttributeValues: { ':email': email },
+      ScanIndexForward: false,
+      Limit: limit,
+    }),
+  );
+
+  return page.Items || [];
+};
+
+/**
+ * Move a withdrawal from one of `from` to `to` and record the event. What
+ * happens to the wallet depends on where it lands:
+ *
+ *   APPROVED            wallet untouched
+ *   PAID                onHold -= amount, totalPaidOut += amount, close it
+ *   REJECTED/CANCELLED  onHold -= amount, balance += amount, close it, and
+ *                       write the WITHDRAWAL_RETURNED ledger entry
+ *
+ * The status condition makes a double-click a TransactionCanceledException
+ * instead of paying or refunding twice; the openWithdrawalId condition keeps
+ * the wallet tied to this exact withdrawal.
+ */
+export const transitionPartnerWithdrawal = async (params: {
+  withdrawal: { withdrawalId: string; email: string; amount: number };
+  from: readonly WithdrawalStatus[];
+  to: WithdrawalStatus;
+  event: WithdrawalEvent;
+  set?: Record<string, unknown>;
+  returnEntry?: PartnerLedgerEntry;
+}): Promise<void> => {
+  const { withdrawal } = params;
+  const names: Record<string, string> = {
+    '#status': 'status',
+    '#updatedAt': 'updatedAt',
+    '#events': 'events',
+  };
+  const values: Record<string, unknown> = {
+    ':to': params.to,
+    ':updatedAt': params.event.at,
+    ':event': [params.event],
+    ':empty': [],
+  };
+  const assignments = [
+    '#status = :to',
+    '#updatedAt = :updatedAt',
+    '#events = list_append(if_not_exists(#events, :empty), :event)',
+  ];
+
+  Object.entries(params.set || {}).forEach(([key, value], index) => {
+    names[`#f${index}`] = key;
+    values[`:v${index}`] = value;
+    assignments.push(`#f${index} = :v${index}`);
+  });
+
+  const fromKeys = params.from.map((status, index) => {
+    values[`:from${index}`] = status;
+    return `:from${index}`;
+  });
+
+  const transactItems: Record<string, unknown>[] = [
+    {
+      Update: {
+        TableName: PARTNER_WITHDRAWAL_TABLE_NAME,
+        Key: { withdrawalId: withdrawal.withdrawalId },
+        UpdateExpression: `SET ${assignments.join(', ')}`,
+        ConditionExpression: `#status IN (${fromKeys.join(', ')})`,
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: values,
+      },
+    },
+  ];
+
+  const releases = params.to === 'REJECTED' || params.to === 'CANCELLED';
+
+  if (params.to === 'PAID' || releases) {
+    transactItems.push({
+      Update: {
+        TableName: PARTNER_WALLET_TABLE_NAME,
+        Key: { email: withdrawal.email },
+        UpdateExpression: releases
+          ? 'SET #onHold = #onHold - :amt, #balance = #balance + :amt, #updatedAt = :now REMOVE #openWithdrawalId'
+          : 'SET #onHold = #onHold - :amt, #totalPaidOut = if_not_exists(#totalPaidOut, :zero) + :amt, #updatedAt = :now REMOVE #openWithdrawalId',
+        ConditionExpression: '#openWithdrawalId = :id',
+        ExpressionAttributeNames: {
+          '#onHold': 'onHold',
+          '#openWithdrawalId': 'openWithdrawalId',
+          '#updatedAt': 'updatedAt',
+          ...(releases ? { '#balance': 'balance' } : { '#totalPaidOut': 'totalPaidOut' }),
+        },
+        ExpressionAttributeValues: {
+          ':amt': withdrawal.amount,
+          ':id': withdrawal.withdrawalId,
+          ':now': params.event.at,
+          ...(releases ? {} : { ':zero': 0 }),
+        },
+      },
+    });
+  }
+
+  if (releases && params.returnEntry) {
+    transactItems.push({
+      Put: {
+        TableName: PARTNER_LEDGER_TABLE_NAME,
+        Item: params.returnEntry,
+        ConditionExpression: 'attribute_not_exists(entryId)',
+      },
+    });
+  }
+
+  await sendDynamoCommand(new TransactWriteCommand({ TransactItems: transactItems as never }));
 };
