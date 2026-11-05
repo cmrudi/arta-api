@@ -153,6 +153,32 @@ export type PartnerPayoutSummary = {
   ledger: Record<string, unknown>[];
 };
 
+// The partner sees what happened, not which finance staff did it.
+const forPartnerLedger = (entry: Record<string, unknown>): Record<string, unknown> => {
+  const { by: _by, ...rest } = entry;
+
+  void _by;
+  return rest;
+};
+
+export const toPartnerWithdrawalView = (withdrawal: Record<string, unknown>): Record<string, unknown> => {
+  const { reviewedBy: _reviewedBy, paidBy: _paidBy, events, ...rest } = withdrawal;
+
+  void _reviewedBy;
+  void _paidBy;
+  return {
+    ...rest,
+    events: Array.isArray(events)
+      ? events.map((event) => {
+          const { by: _by, ...visible } = (event || {}) as Record<string, unknown>;
+
+          void _by;
+          return visible;
+        })
+      : [],
+  };
+};
+
 export const getPartnerPayoutSummary = async (rawEmail: string): Promise<PartnerPayoutSummary> => {
   const email = normalizeEmail(rawEmail);
   const [walletResult, withdrawals, ledger] = await Promise.all([
@@ -169,9 +195,9 @@ export const getPartnerPayoutSummary = async (rawEmail: string): Promise<Partner
   return {
     wallet,
     minWithdrawal: minWithdrawalAmount(),
-    openWithdrawal,
-    withdrawals,
-    ledger,
+    openWithdrawal: openWithdrawal ? toPartnerWithdrawalView(openWithdrawal) : undefined,
+    withdrawals: withdrawals.map(toPartnerWithdrawalView),
+    ledger: ledger.map(forPartnerLedger),
   };
 };
 

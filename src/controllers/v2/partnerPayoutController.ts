@@ -21,6 +21,7 @@ import {
   markPartnerWithdrawalPaid,
   rejectPartnerWithdrawal,
   requestPartnerWithdrawal,
+  toPartnerWithdrawalView,
 } from '../../services/partnerPayoutService';
 
 const STATUS_BY_REASON: Record<string, number> = {
@@ -60,6 +61,9 @@ const actorOf = (res: Response<unknown, AuthenticatedLocals>): string => {
 const sendWithdrawal = (res: Response, result: WithdrawalResult, status = 200): Response =>
   result.success ? res.status(status).json({ success: true, withdrawal: result.withdrawal }) : fail(res, result);
 
+const toPartnerView = (result: WithdrawalResult): WithdrawalResult =>
+  result.success ? { success: true, withdrawal: toPartnerWithdrawalView(result.withdrawal) } : result;
+
 // ---------------------------------------------------------------------------
 // Partner routes (the partner portal's own token; identity is its email)
 
@@ -90,7 +94,7 @@ export const postMyPartnerWithdrawal = async (
       note: input.note,
     });
 
-    return sendWithdrawal(res, result, 201);
+    return sendWithdrawal(res, toPartnerView(result), 201);
   } catch (error) {
     return serverError(res, 'failed to request withdrawal', error);
   }
@@ -101,7 +105,7 @@ export const postCancelMyPartnerWithdrawal = async (
   res: Response<unknown, AuthenticatedLocals>,
 ): Promise<Response> => {
   try {
-    return sendWithdrawal(res, await cancelPartnerWithdrawal(emailOf(res), param(req, 'withdrawalId')));
+    return sendWithdrawal(res, toPartnerView(await cancelPartnerWithdrawal(emailOf(res), param(req, 'withdrawalId'))));
   } catch (error) {
     return serverError(res, 'failed to cancel withdrawal', error);
   }
