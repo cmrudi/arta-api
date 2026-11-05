@@ -85,7 +85,7 @@ are skipped (logged as `[partnerPayoutEmail] template not configured`).
 | `requestedAt` | 5 November 2026 pukul 10.12 |
 | `paidAt` / `transferReference` | set when paid |
 | `rejectReason` | set when rejected |
-| `portalUrl` | `${PARTNER_PORTAL_URL}/dashboard` |
+| `portalUrl` | `${PARTNER_PORTAL_URL}/dashboard?tab=withdrawal` |
 | `csUrl` | WhatsApp link (`WA_CS_LINK`) |
 
 Optional overrides on the Lambda: `PARTNER_PORTAL_URL` (default

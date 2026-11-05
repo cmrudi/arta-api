@@ -97,7 +97,7 @@ export const sendPartnerPayoutEmail = async (
     paidAt: formatDate(withdrawal.paidAt),
     transferReference: str(withdrawal.transferReference),
     rejectReason: str(withdrawal.rejectReason),
-    portalUrl: `${PARTNER_PORTAL_URL}/dashboard`,
+    portalUrl: `${PARTNER_PORTAL_URL}/dashboard?tab=withdrawal`,
     csUrl: WA_CS_LINK,
   };
 
