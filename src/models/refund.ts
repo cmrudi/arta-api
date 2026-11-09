@@ -16,6 +16,13 @@ export type RefundItem = {
   status: RefundStatus;
   /** Order.price at request time; what refundExecute records and Midtrans returns. */
   amount: number;
+  /**
+   * The orderId Midtrans was charged under. Differs from orderId for the 2nd
+   * and later eSIMs of a multi-eSIM purchase: one payment covers the group
+   * and Midtrans only knows the group's first order (Order.groupId). Absent on
+   * refunds created before multi-eSIM purchases, which use orderId.
+   */
+  paymentOrderId?: string;
   paymentType?: string;
   provider?: string;
   regionCode?: string;

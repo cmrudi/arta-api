@@ -268,7 +268,10 @@ export const createRefundRequest = async (input: {
     iccid: str(sim.iccid) || undefined,
     email: normalizeEmail(order.email),
     status: 'PENDING_REVIEW',
+    // For a multi-eSIM purchase this is this eSIM's share of the payment, so
+    // only that part is returned (a partial refund of the group's payment).
     amount: Number(order.price) || 0,
+    paymentOrderId: str(order.groupId) || str(order.orderId),
     paymentType: str(order.paymentType) || undefined,
     provider: str(sim.provider) || undefined,
     regionCode: str(sim.regionCode) || undefined,
@@ -363,7 +366,7 @@ const runGatewayStep = async (refund: Record<string, unknown>, actor: string): P
 
   try {
     const result = await requestMidtransRefund({
-      orderId: str(refund.orderId),
+      orderId: str(refund.paymentOrderId) || str(refund.orderId),
       refundKey: refundId,
       amount: Number(refund.amount),
       reason: `Refund ${refundId}`,

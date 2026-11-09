@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 
 import { AuthenticatedLocals, getAuth0Email } from '../../middlewares/auth0BearerAuth';
-import { validatePromoByProductCode } from '../../services/promotionService';
+import { MAX_ORDER_QUANTITY, validatePromoByProductCode } from '../../services/promotionService';
 
 export const validatePromotion = async (
   req: Request,
@@ -17,6 +17,17 @@ export const validatePromotion = async (
     });
   }
 
+  // ?quantity=N prices the promo for N eSIMs of the product; absent means 1.
+  const rawQuantity = req.query.quantity;
+  const quantity = rawQuantity === undefined ? 1 : Number(rawQuantity);
+
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > MAX_ORDER_QUANTITY) {
+    return res.status(400).json({
+      success: false,
+      message: `quantity must be a whole number from 1 to ${MAX_ORDER_QUANTITY}`,
+    });
+  }
+
   // requireAuth0EndUser has already verified the token and rejected an unverified
   // address, so this is the trusted identity of the caller.
   const email = getAuth0Email(res.locals.auth);
@@ -29,7 +40,7 @@ export const validatePromotion = async (
   }
 
   try {
-    const result = await validatePromoByProductCode(productCode, promoCode, email);
+    const result = await validatePromoByProductCode(productCode, promoCode, email, quantity);
 
     if (!result.success) {
       if (result.reason === 'PRODUCT_NOT_FOUND') {
@@ -71,6 +82,7 @@ export const validatePromotion = async (
       productCode,
       promoCode,
       redemptionId: result.redemptionId,
+      quantity: result.quantity,
       price: result.price,
       priceCut: result.priceCut,
       finalPrice: result.finalPrice,

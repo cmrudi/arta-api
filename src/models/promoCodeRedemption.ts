@@ -11,6 +11,12 @@ export type PromoCodeRedemptionItem = {
   price: number;
   priceCut: number;
   finalPrice: number;
+  /**
+   * How many eSIMs the promo was priced for. price, priceCut and finalPrice
+   * cover all of them: the discount applies to the whole order. Absent on
+   * redemptions made before multi-eSIM purchases, which mean 1.
+   */
+  quantity?: number;
   status: PromoCodeRedemptionStatus;
   createdAt: string;
 };

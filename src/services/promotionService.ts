@@ -19,6 +19,7 @@ type ValidatePromoSuccessResult = {
   // token via the controller — never from client-supplied input, so it is safe
   // to key per-user promo rules (maxUsage, allowlists) on it.
   email: string;
+  quantity: number;
   price: number;
   priceCut: number;
   finalPrice: number;
@@ -39,6 +40,9 @@ export type ValidatePromoResult = ValidatePromoSuccessResult | ValidatePromoErro
 // Rupiah. Nothing may be sold for less than this, however generous the promo:
 // a zero-rupiah charge is not something the payment gateway can process.
 const MINIMUM_FINAL_PRICE = 1000;
+
+// Most eSIMs one order may buy; createOrder enforces the same limit.
+export const MAX_ORDER_QUANTITY = 20;
 
 const normalizeNumber = (value: unknown): number =>
   typeof value === 'number' ? value : Number(String(value));
@@ -81,6 +85,7 @@ export const validatePromoByProductCode = async (
   productCode: string,
   promoCode: string,
   email: string,
+  quantity = 1,
 ): Promise<ValidatePromoResult> => {
   const product = await readFirstProductByCode(productCode);
 
@@ -139,14 +144,18 @@ export const validatePromoByProductCode = async (
     }
   }
 
-  let priceCut = (price * discountPercentage) / 100;
+  // The promo applies to the whole order: the percentage is taken of every
+  // eSIM together, and maxPriceCut caps the order's total discount.
+  const orderPrice = price * quantity;
+  let priceCut = (orderPrice * discountPercentage) / 100;
 
   if (priceCut > maxPriceCut) {
     priceCut = maxPriceCut;
   }
 
-  const priceAmount = price * 1000;
-  let priceCutAmount = priceCut * 1000;
+  const priceAmount = orderPrice * 1000;
+  // Whole rupiah: the payment gateway only charges integer IDR amounts.
+  let priceCutAmount = Math.floor(priceCut * 1000);
 
   // A 100%-discount code on a cheap package would otherwise price the order at
   // zero, which the payment gateway cannot charge. Trim the discount rather
@@ -168,6 +177,7 @@ export const validatePromoByProductCode = async (
     price: priceAmount,
     priceCut: priceCutAmount,
     finalPrice: finalPriceAmount,
+    quantity,
     status: 'INITIATED',
     createdAt: new Date().toISOString(),
   };
@@ -192,6 +202,7 @@ export const validatePromoByProductCode = async (
     promo,
     redemptionId: redemption.redemptionId,
     email,
+    quantity,
     price: redemption.price,
     priceCut: redemption.priceCut,
     finalPrice: redemption.finalPrice,
