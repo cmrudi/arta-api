@@ -158,7 +158,7 @@ and is deleted. Should a duplicate ever remain, login uses the oldest account
 and `GET /v2/admin/partners` marks both with `duplicateEmail: true`.
 
 Key rows keep `email` too, for the old `/v1/partner` Lambdas while they still
-run. Existing partners get their partnerId from `scripts/partner-id/migrate.py`.
+run.
 
 ### Partner Payouts (v2)
 
@@ -205,7 +205,6 @@ finance to read; the partnerId is what links them.
 The Lambda role needs `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `Query`,
 `Scan` and `TransactWriteItems` on these tables, `PartnerAccount` and `Partner`,
 and their indexes, plus `Query` on `Order/index/partner-createdAt-index`.
-`scripts/partner-id/` has the CloudShell scripts.
 
 Environment:
 
