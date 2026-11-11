@@ -7,12 +7,12 @@ import { randomBytes } from 'crypto';
  * changes. Their login email and their affiliate keys (go.artamobile.id/<key>)
  * may change over time; the partnerId ties them together.
  *
- *   PartnerAccount  PK partnerId. Two kinds of rows:
- *                     "PTN-XXXXXXXX"   the account: email, name, timestamps
- *                     "EMAIL#<email>"  guard row pointing at the account that
- *                                      owns that login email. It makes an email
- *                                      unique (conditional put) and turns the
- *                                      login lookup into one GetItem.
+ *   PartnerAccount  PK partnerId ("PTN-XXXXXXXX"): email, name, timestamps.
+ *                   GSI email-index finds the account for a login email.
+ *                   DynamoDB cannot make an indexed value unique, so one
+ *                   account per email is kept by checking before creating and
+ *                   re-checking after (see partnerService); if two accounts
+ *                   ever share an email, the oldest one wins.
  *   Partner         PK key (the affiliate key). One row per key, with the
  *                   owner's partnerId (GSI partnerId-index) and, for the old
  *                   Lambdas that still read it, the email at creation time.
@@ -38,7 +38,6 @@ export type PartnerKey = {
 };
 
 export const PARTNER_ID_PREFIX = 'PTN-';
-export const EMAIL_GUARD_PREFIX = 'EMAIL#';
 
 // Crockford base32: no I, L, O or U, so an ID read aloud or typed by finance
 // cannot be confused.
@@ -54,8 +53,6 @@ export const PARTNER_ID_PATTERN = /^PTN-[0-9A-Z]{8}$/;
 
 export const isPartnerId = (value: unknown): value is string =>
   typeof value === 'string' && PARTNER_ID_PATTERN.test(value);
-
-export const emailGuardId = (email: string): string => `${EMAIL_GUARD_PREFIX}${email}`;
 
 /** What the portal allows: lowercase letters, digits and hyphens. */
 export const PARTNER_KEY_PATTERN = /^[a-z0-9-]{3,40}$/;

@@ -1,4 +1,5 @@
 import {
+  DeleteCommand,
   GetCommand,
   PutCommand,
   QueryCommand,
@@ -43,6 +44,7 @@ const PARTNER_WITHDRAWAL_TABLE_NAME = 'PartnerWithdrawal';
 const PARTNER_WITHDRAWAL_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
 const PARTNER_WITHDRAWAL_PARTNER_CREATED_AT_INDEX = 'partnerId-createdAt-index';
 const PARTNER_ACCOUNT_TABLE_NAME = 'PartnerAccount';
+const PARTNER_ACCOUNT_EMAIL_INDEX = 'email-index';
 const PARTNER_KEY_TABLE_NAME = 'Partner';
 const PARTNER_KEY_PARTNER_ID_INDEX = 'partnerId-index';
 const ORDER_PARTNER_CREATED_AT_INDEX = 'partner-createdAt-index';
@@ -1066,16 +1068,20 @@ export const getPartnerAccount = async (
     }),
   );
 
-/** The EMAIL#<email> guard row names the account that owns the login email. */
-export const getPartnerEmailGuard = async (
-  guardId: string,
-): Promise<{ Item?: Record<string, unknown> }> =>
-  sendDynamoCommand(
-    new GetCommand({
+/** Every account with this login email; normally one (see models/partner.ts). */
+export const queryPartnerAccountsByEmail = async (email: string): Promise<Record<string, unknown>[]> => {
+  const page = await sendDynamoCommand<{ Items?: Record<string, unknown>[] }>(
+    new QueryCommand({
       TableName: PARTNER_ACCOUNT_TABLE_NAME,
-      Key: { partnerId: guardId },
+      IndexName: PARTNER_ACCOUNT_EMAIL_INDEX,
+      KeyConditionExpression: '#email = :email',
+      ExpressionAttributeNames: { '#email': 'email' },
+      ExpressionAttributeValues: { ':email': email },
     }),
   );
+
+  return page.Items || [];
+};
 
 export const scanPartnerAccounts = async (prefix: string): Promise<Record<string, unknown>[]> => {
   const items: Record<string, unknown>[] = [];
@@ -1103,43 +1109,61 @@ export const scanPartnerAccounts = async (prefix: string): Promise<Record<string
 };
 
 /**
- * A new partner: the account, its email guard and its first key, all or
- * nothing. Fails the condition when the email already has an account, the key
- * is taken, or (vanishingly unlikely) the random partnerId already exists.
+ * A new partner: the account and its first key, both or neither. Fails the
+ * condition when the key is taken or (vanishingly unlikely) the random
+ * partnerId already exists.
  */
 export const createPartnerAccountWithKey = async (params: {
   account: { partnerId: string; email: string; name?: string; createdAt: string; updatedAt: string };
-  guardId: string;
   key: { key: string; partnerId: string; email: string; createdAt: string };
 }): Promise<void> => {
-  const { account, guardId, key } = params;
-
   await sendDynamoCommand(
     new TransactWriteCommand({
       TransactItems: [
         {
           Put: {
             TableName: PARTNER_ACCOUNT_TABLE_NAME,
-            Item: { partnerId: guardId, ownerPartnerId: account.partnerId, email: account.email, createdAt: account.createdAt },
-            ConditionExpression: 'attribute_not_exists(partnerId)',
-          },
-        },
-        {
-          Put: {
-            TableName: PARTNER_ACCOUNT_TABLE_NAME,
-            Item: account,
+            Item: params.account,
             ConditionExpression: 'attribute_not_exists(partnerId)',
           },
         },
         {
           Put: {
             TableName: PARTNER_KEY_TABLE_NAME,
-            Item: key,
+            Item: params.key,
             ConditionExpression: 'attribute_not_exists(#key)',
             ExpressionAttributeNames: { '#key': 'key' },
           },
         },
       ],
+    }),
+  );
+};
+
+/**
+ * Re-check cleanup: hand a key from a duplicate account to the account that
+ * keeps the email. Only if the key still belongs to the duplicate.
+ */
+export const reassignPartnerKey = async (params: { key: string; from: string; to: string }): Promise<void> => {
+  await sendDynamoCommand(
+    new UpdateCommand({
+      TableName: PARTNER_KEY_TABLE_NAME,
+      Key: { key: params.key },
+      UpdateExpression: 'SET #partnerId = :to',
+      ConditionExpression: '#partnerId = :from',
+      ExpressionAttributeNames: { '#partnerId': 'partnerId' },
+      ExpressionAttributeValues: { ':from': params.from, ':to': params.to },
+    }),
+  );
+};
+
+/** Re-check cleanup: remove a duplicate account that was just created. */
+export const deletePartnerAccount = async (partnerId: string): Promise<void> => {
+  await sendDynamoCommand(
+    new DeleteCommand({
+      TableName: PARTNER_ACCOUNT_TABLE_NAME,
+      Key: { partnerId },
+      ConditionExpression: 'attribute_exists(partnerId)',
     }),
   );
 };
@@ -1195,54 +1219,21 @@ export const queryPartnerKeysByPartnerId = async (partnerId: string): Promise<Re
   return items;
 };
 
-/**
- * Move a partner to a new login email: drop the old guard (only if it is still
- * theirs), claim the new one (only if free) and update the account (only if the
- * email is still the one we read).
- */
-export const changePartnerAccountEmail = async (params: {
+/** Set a partner's login email, only if it is still the one we read. */
+export const setPartnerAccountEmail = async (params: {
   partnerId: string;
   oldEmail: string;
   newEmail: string;
-  oldGuardId: string;
-  newGuardId: string;
   now: string;
 }): Promise<void> => {
   await sendDynamoCommand(
-    new TransactWriteCommand({
-      TransactItems: [
-        {
-          Put: {
-            TableName: PARTNER_ACCOUNT_TABLE_NAME,
-            Item: {
-              partnerId: params.newGuardId,
-              ownerPartnerId: params.partnerId,
-              email: params.newEmail,
-              createdAt: params.now,
-            },
-            ConditionExpression: 'attribute_not_exists(partnerId)',
-          },
-        },
-        {
-          Update: {
-            TableName: PARTNER_ACCOUNT_TABLE_NAME,
-            Key: { partnerId: params.partnerId },
-            UpdateExpression: 'SET #email = :new, #updatedAt = :now',
-            ConditionExpression: '#email = :old',
-            ExpressionAttributeNames: { '#email': 'email', '#updatedAt': 'updatedAt' },
-            ExpressionAttributeValues: { ':new': params.newEmail, ':old': params.oldEmail, ':now': params.now },
-          },
-        },
-        {
-          Delete: {
-            TableName: PARTNER_ACCOUNT_TABLE_NAME,
-            Key: { partnerId: params.oldGuardId },
-            ConditionExpression: '#owner = :partnerId',
-            ExpressionAttributeNames: { '#owner': 'ownerPartnerId' },
-            ExpressionAttributeValues: { ':partnerId': params.partnerId },
-          },
-        },
-      ],
+    new UpdateCommand({
+      TableName: PARTNER_ACCOUNT_TABLE_NAME,
+      Key: { partnerId: params.partnerId },
+      UpdateExpression: 'SET #email = :new, #updatedAt = :now',
+      ConditionExpression: '#email = :old',
+      ExpressionAttributeNames: { '#email': 'email', '#updatedAt': 'updatedAt' },
+      ExpressionAttributeValues: { ':new': params.newEmail, ':old': params.oldEmail, ':now': params.now },
     }),
   );
 };

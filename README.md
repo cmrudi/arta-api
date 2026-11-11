@@ -147,14 +147,18 @@ DynamoDB:
 
 | Table | Key | Global secondary indexes |
 |---|---|---|
-| `PartnerAccount` | `partnerId` (S) | - |
+| `PartnerAccount` | `partnerId` (S) | `email-index`: `email` (S), projection ALL |
 | `Partner` (existing, one row per key) | `key` (S) | `partnerId-index`: `partnerId` (S), projection ALL |
 
-`PartnerAccount` holds two kinds of rows: the account (`PTN-...`) and a guard
-row `EMAIL#<email>` with `ownerPartnerId`, which makes a login email unique and
-turns the login lookup into one GetItem. Key rows keep `email` too, for the old
-`/v1/partner` Lambdas while they still run. Existing partners get their
-partnerId from `scripts/partner-id/migrate.py`.
+DynamoDB cannot make an indexed value unique, so one account per login email is
+kept by checking the `email-index` before creating an account and re-checking
+about a second later (`PARTNER_RECHECK_DELAY_MS`, default 1000): if a parallel
+sign-up created a second account, the newer one moves its keys to the oldest
+and is deleted. Should a duplicate ever remain, login uses the oldest account
+and `GET /v2/admin/partners` marks both with `duplicateEmail: true`.
+
+Key rows keep `email` too, for the old `/v1/partner` Lambdas while they still
+run. Existing partners get their partnerId from `scripts/partner-id/migrate.py`.
 
 ### Partner Payouts (v2)
 

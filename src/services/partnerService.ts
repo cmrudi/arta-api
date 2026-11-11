@@ -1,14 +1,16 @@
 import {
-  changePartnerAccountEmail,
   createPartnerAccountWithKey,
+  deletePartnerAccount,
   getPartnerAccount,
-  getPartnerEmailGuard,
   getPartnerKey,
   putPartnerKey,
+  queryPartnerAccountsByEmail,
   queryPartnerKeysByPartnerId,
   queryPublishedEsimOrdersByPartnerKey,
+  reassignPartnerKey,
   scanPartnerAccounts,
   scanPartnerKeys,
+  setPartnerAccountEmail,
   updatePartnerAccountName,
 } from '../lib/dynamoDb';
 import {
@@ -17,7 +19,6 @@ import {
   PARTNER_ID_PREFIX,
   PARTNER_KEY_PATTERN,
   PartnerAccount,
-  emailGuardId,
   isPartnerId,
   newPartnerId,
   normalizePartnerEmail,
@@ -34,6 +35,23 @@ const cancellationCodes = (error: unknown): Array<string | undefined> =>
   ((error as { CancellationReasons?: Array<{ Code?: string }> }).CancellationReasons || []).map(
     (reason) => reason?.Code,
   );
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * How long to wait before the re-check. The email index trails the table by
+ * up to about a second, so re-checking at once could miss a duplicate that a
+ * parallel request has just written.
+ */
+const recheckDelayMs = (): number => {
+  const value = Number(process.env.PARTNER_RECHECK_DELAY_MS);
+
+  return Number.isFinite(value) && value >= 0 ? value : 1000;
+};
+
+/** The account that keeps an email when there are several: the oldest. */
+const byAge = (a: PartnerAccount, b: PartnerAccount): number =>
+  a.createdAt.localeCompare(b.createdAt) || a.partnerId.localeCompare(b.partnerId);
 
 export type PartnerFailureReason =
   | 'INVALID_KEY'
@@ -76,23 +94,14 @@ const primaryKeyOf = (keys: PartnerKeyView[]): string | undefined => keys[keys.l
 // ---------------------------------------------------------------------------
 // Lookups
 
+/** Every account with this email, oldest first. Normally zero or one. */
+const accountsWithEmail = async (email: string): Promise<PartnerAccount[]> =>
+  (await queryPartnerAccountsByEmail(email)).map(toAccount).sort(byAge);
+
 export const findPartnerByEmail = async (rawEmail: string): Promise<PartnerAccount | undefined> => {
   const email = normalizePartnerEmail(rawEmail);
 
-  if (!email) {
-    return undefined;
-  }
-
-  const guard = (await getPartnerEmailGuard(emailGuardId(email))).Item;
-  const partnerId = str(guard?.ownerPartnerId);
-
-  if (!partnerId) {
-    return undefined;
-  }
-
-  const account = (await getPartnerAccount(partnerId)).Item;
-
-  return account ? toAccount(account) : undefined;
+  return email ? (await accountsWithEmail(email))[0] : undefined;
 };
 
 export const findPartnerById = async (partnerId: string): Promise<PartnerAccount | undefined> => {
@@ -117,6 +126,46 @@ export const partnerKeyExists = async (rawKey: string): Promise<boolean> => {
 // ---------------------------------------------------------------------------
 // Partner portal
 
+/**
+ * Re-check after creating an account: if a parallel request created another
+ * account for the same email, the newer one gives its keys to the oldest and
+ * is deleted. Both requests run this, and both agree on which is oldest.
+ * Returns the partnerId that keeps the email.
+ */
+const settleDuplicateAccounts = async (email: string, mine: string, myKey: string): Promise<string> => {
+  await sleep(recheckDelayMs());
+
+  const accounts = await accountsWithEmail(email);
+  const keeper = accounts[0];
+
+  if (!keeper || keeper.partnerId === mine || !accounts.some((item) => item.partnerId === mine)) {
+    return mine;
+  }
+
+  // The key we just wrote may not be in the partnerId index yet, so move it by
+  // name as well as anything the index already shows.
+  const keys = new Set([myKey, ...(await queryPartnerKeysByPartnerId(mine)).map((item) => str(item.key))]);
+
+  for (const key of keys) {
+    try {
+      await reassignPartnerKey({ key, from: mine, to: keeper.partnerId });
+    } catch (error) {
+      if (!isConditionFailure(error)) {
+        throw error;
+      }
+    }
+  }
+
+  await deletePartnerAccount(mine).catch((error) => {
+    if (!isConditionFailure(error)) {
+      throw error;
+    }
+  });
+  console.warn('[partner] merged a duplicate account created in parallel', { email, removed: mine, kept: keeper.partnerId });
+
+  return keeper.partnerId;
+};
+
 export type RegisterResult =
   | { success: true; partnerId: string; key: string; createdAccount: boolean }
   | PartnerFailure;
@@ -125,6 +174,9 @@ export type RegisterResult =
  * The logged-in user claims an affiliate key. Their first key creates their
  * partner account; any later key joins the same account. The email is the one
  * on their token, never one from the request body.
+ *
+ * One account per email: check before creating, re-check after (see
+ * settleDuplicateAccounts).
  */
 export const registerPartnerKey = async (params: { email: string; key: unknown }): Promise<RegisterResult> => {
   const email = normalizePartnerEmail(params.email);
@@ -139,54 +191,47 @@ export const registerPartnerKey = async (params: { email: string; key: unknown }
   }
 
   const now = new Date().toISOString();
+  const existing = (await accountsWithEmail(email))[0];
 
-  // Two attempts: the second covers losing a race against the same user
-  // creating their account in another tab, and a (practically impossible)
-  // partnerId collision.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const existing = await findPartnerByEmail(email);
-
-    if (existing) {
-      try {
-        await putPartnerKey({ key, partnerId: existing.partnerId, email, createdAt: now });
-      } catch (error) {
-        if (isConditionFailure(error)) {
-          return fail('KEY_TAKEN', 'this key is already used');
-        }
-
-        throw error;
+  if (existing) {
+    try {
+      await putPartnerKey({ key, partnerId: existing.partnerId, email, createdAt: now });
+    } catch (error) {
+      if (isConditionFailure(error)) {
+        return fail('KEY_TAKEN', 'this key is already used');
       }
 
-      return { success: true, partnerId: existing.partnerId, key, createdAccount: false };
+      throw error;
     }
 
+    return { success: true, partnerId: existing.partnerId, key, createdAccount: false };
+  }
+
+  // Two attempts only to survive a (practically impossible) partnerId collision.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     const partnerId = newPartnerId();
 
     try {
       await createPartnerAccountWithKey({
         account: { partnerId, email, createdAt: now, updatedAt: now },
-        guardId: emailGuardId(email),
         key: { key, partnerId, email, createdAt: now },
       });
-
-      return { success: true, partnerId, key, createdAccount: true };
     } catch (error) {
       if (!isConditionFailure(error)) {
         throw error;
       }
 
-      // Transaction order: [email guard, account, key].
-      const [guardCode, , keyCode] = cancellationCodes(error);
-
-      if (keyCode === 'ConditionalCheckFailed') {
+      // Transaction order: [account, key].
+      if (cancellationCodes(error)[1] === 'ConditionalCheckFailed') {
         return fail('KEY_TAKEN', 'this key is already used');
       }
 
-      if (guardCode !== 'ConditionalCheckFailed' && attempt > 0) {
-        throw error;
-      }
-      // Otherwise the email got an account meanwhile (or the ID collided): retry.
+      continue;
     }
+
+    const kept = await settleDuplicateAccounts(email, partnerId, key);
+
+    return { success: true, partnerId: kept, key, createdAccount: kept === partnerId };
   }
 
   return fail('CONFLICT', 'could not register the key; please try again');
@@ -270,7 +315,11 @@ export const getPartnerOrders = async (rawEmail: string): Promise<PartnerOrdersR
 // ---------------------------------------------------------------------------
 // Finance / admin
 
-export type PartnerView = PartnerAccount & { keys: PartnerKeyView[] };
+export type PartnerView = PartnerAccount & {
+  keys: PartnerKeyView[];
+  /** Another account has the same login email (should not happen; see models/partner.ts). */
+  duplicateEmail?: boolean;
+};
 
 export const listPartners = async (): Promise<PartnerView[]> => {
   const [accounts, keyRows] = await Promise.all([scanPartnerAccounts(PARTNER_ID_PREFIX), scanPartnerKeys()]);
@@ -284,13 +333,24 @@ export const listPartners = async (): Promise<PartnerView[]> => {
     }
   }
 
+  const emailCounts = new Map<string, number>();
+
+  for (const item of accounts) {
+    const email = str(item.email);
+    emailCounts.set(email, (emailCounts.get(email) || 0) + 1);
+  }
+
   return accounts
     .map((item) => {
       const account = toAccount(item);
 
-      return { ...account, keys: toKeyViews(keysByPartner.get(account.partnerId) || []) };
+      return {
+        ...account,
+        keys: toKeyViews(keysByPartner.get(account.partnerId) || []),
+        ...((emailCounts.get(account.email) || 0) > 1 ? { duplicateEmail: true } : {}),
+      };
     })
-    .sort((a, b) => a.email.localeCompare(b.email));
+    .sort((a, b) => a.email.localeCompare(b.email) || byAge(a, b));
 };
 
 export type PartnerDetailResult = { success: true; partner: PartnerView } | PartnerFailure;
@@ -345,24 +405,37 @@ export const updatePartner = async (params: {
     }
 
     if (email !== current.email) {
+      const takenBy = async (): Promise<boolean> =>
+        (await accountsWithEmail(email)).some((item) => item.partnerId !== current.partnerId);
+
+      // Check before changing...
+      if (await takenBy()) {
+        return fail('EMAIL_TAKEN', 'another partner already logs in with this email');
+      }
+
       try {
-        await changePartnerAccountEmail({
-          partnerId: current.partnerId,
-          oldEmail: current.email,
-          newEmail: email,
-          oldGuardId: emailGuardId(current.email),
-          newGuardId: emailGuardId(email),
-          now,
-        });
+        await setPartnerAccountEmail({ partnerId: current.partnerId, oldEmail: current.email, newEmail: email, now });
       } catch (error) {
-        if (!isConditionFailure(error)) {
-          throw error;
+        if (isConditionFailure(error)) {
+          return fail('CONFLICT', 'the partner was changed meanwhile; reload and try again');
         }
 
-        // Transaction order: [new guard, account, old guard].
-        return cancellationCodes(error)[0] === 'ConditionalCheckFailed'
-          ? fail('EMAIL_TAKEN', 'another partner already logs in with this email')
-          : fail('CONFLICT', 'the partner was changed meanwhile; reload and try again');
+        throw error;
+      }
+
+      // ...and re-check after: if another account took the email meanwhile,
+      // put this partner's old email back.
+      await sleep(recheckDelayMs());
+
+      if (await takenBy()) {
+        await setPartnerAccountEmail({
+          partnerId: current.partnerId,
+          oldEmail: email,
+          newEmail: current.email,
+          now: new Date().toISOString(),
+        }).catch((error) => console.error('[partner] could not revert email change', current.partnerId, error));
+
+        return fail('EMAIL_TAKEN', 'another partner already logs in with this email');
       }
     }
   }

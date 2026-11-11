@@ -16,7 +16,18 @@ create() { # name, then the rest of the create-table arguments
     && echo "ok    table $name" || echo "FAIL  table $name"
 }
 
-# 1. Partner accounts: PTN-... rows and EMAIL#<email> guard rows.
+add_index() { # table, index name, attribute
+  if aws dynamodb describe-table --region $R --table-name "$1" --query 'Table.GlobalSecondaryIndexes[].IndexName' --output text 2>/dev/null | grep -qw "$2"; then
+    echo "skip  index $1/$2 (exists)"
+  else
+    aws dynamodb update-table --region $R --table-name "$1" \
+      --attribute-definitions AttributeName=$3,AttributeType=S \
+      --global-secondary-index-updates "[{\"Create\":{\"IndexName\":\"$2\",\"KeySchema\":[{\"AttributeName\":\"$3\",\"KeyType\":\"HASH\"}],\"Projection\":{\"ProjectionType\":\"ALL\"}}}]" >/dev/null \
+      && echo "ok    index $1/$2 (building)" || echo "FAIL  index $1/$2"
+  fi
+}
+
+# 1. Partner accounts (PTN-... rows), found by login email through email-index.
 create PartnerAccount \
   --attribute-definitions AttributeName=partnerId,AttributeType=S \
   --key-schema AttributeName=partnerId,KeyType=HASH
@@ -36,15 +47,10 @@ create PartnerWithdrawal \
   --key-schema AttributeName=withdrawalId,KeyType=HASH \
   --global-secondary-indexes '[{"IndexName":"status-createdAt-index","KeySchema":[{"AttributeName":"status","KeyType":"HASH"},{"AttributeName":"createdAt","KeyType":"RANGE"}],"Projection":{"ProjectionType":"ALL"}},{"IndexName":"partnerId-createdAt-index","KeySchema":[{"AttributeName":"partnerId","KeyType":"HASH"},{"AttributeName":"createdAt","KeyType":"RANGE"}],"Projection":{"ProjectionType":"ALL"}}]'
 
-# 3. Index on the existing Partner (key) table: all keys of one partnerId.
-if aws dynamodb describe-table --region $R --table-name Partner --query 'Table.GlobalSecondaryIndexes[].IndexName' --output text 2>/dev/null | grep -qw partnerId-index; then
-  echo "skip  index Partner/partnerId-index (exists)"
-else
-  aws dynamodb update-table --region $R --table-name Partner \
-    --attribute-definitions AttributeName=partnerId,AttributeType=S \
-    --global-secondary-index-updates '[{"Create":{"IndexName":"partnerId-index","KeySchema":[{"AttributeName":"partnerId","KeyType":"HASH"}],"Projection":{"ProjectionType":"ALL"}}}]' >/dev/null \
-    && echo "ok    index Partner/partnerId-index (building)" || echo "FAIL  index Partner/partnerId-index"
-fi
+# 3. Indexes: login email -> account, and all keys of one partnerId.
+aws dynamodb wait table-exists --region $R --table-name PartnerAccount
+add_index PartnerAccount email-index email
+add_index Partner partnerId-index partnerId
 
 # 4. Permissions.
 T="arn:aws:dynamodb:$R:$ACCOUNT:table"
@@ -59,7 +65,7 @@ cat > /tmp/partner-api-policy.json <<EOF
       "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem",
                  "dynamodb:Query", "dynamodb:Scan", "dynamodb:ConditionCheckItem"],
       "Resource": [
-        "$T/PartnerAccount", "$T/Partner", "$T/Partner/index/*",
+        "$T/PartnerAccount", "$T/PartnerAccount/index/*", "$T/Partner", "$T/Partner/index/*",
         "$T/PartnerWallet", "$T/PartnerLedger", "$T/PartnerLedger/index/*",
         "$T/PartnerWithdrawal", "$T/PartnerWithdrawal/index/*"
       ]
@@ -97,14 +103,16 @@ aws iam put-role-policy --role-name montnetsEsimIssuance-role \
   || echo "FAIL  policy on montnetsEsimIssuance-role"
 
 echo
-echo "Waiting for tables and the Partner index to become ACTIVE..."
+echo "Waiting for tables and indexes to become ACTIVE..."
 for t in PartnerAccount PartnerWallet PartnerLedger PartnerWithdrawal; do
   aws dynamodb wait table-exists --region $R --table-name $t && echo "ACTIVE $t"
 done
-for i in $(seq 1 60); do
-  s=$(aws dynamodb describe-table --region $R --table-name Partner \
-      --query "Table.GlobalSecondaryIndexes[?IndexName=='partnerId-index'].IndexStatus" --output text)
-  [ "$s" = "ACTIVE" ] && { echo "ACTIVE Partner/partnerId-index"; break; }
-  sleep 10
+for ti in PartnerAccount:email-index Partner:partnerId-index; do
+  for i in $(seq 1 60); do
+    s=$(aws dynamodb describe-table --region $R --table-name ${ti%%:*} \
+        --query "Table.GlobalSecondaryIndexes[?IndexName=='${ti#*:}'].IndexStatus" --output text)
+    [ "$s" = "ACTIVE" ] && { echo "ACTIVE ${ti%%:*}/${ti#*:}"; break; }
+    sleep 10
+  done
 done
 echo "Done. Next: python3 migrate.py (dry run), then python3 migrate.py --apply"

@@ -5,7 +5,6 @@ Give every existing affiliate partner a permanent partnerId.
 Reads the Partner table (one row per affiliate key), groups the keys by login
 email (trimmed, lowercased), and for each email:
   - creates a PartnerAccount row  PTN-XXXXXXXX  (email, createdAt = oldest key)
-  - creates the guard row         EMAIL#<email> -> ownerPartnerId
   - sets partnerId on each of that email's key rows
 
 Dry run by default; pass --apply to write. Safe to re-run: an email that
@@ -21,7 +20,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 import boto3
-from boto3.dynamodb.conditions import Attr
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
 REGION = "ap-southeast-1"
@@ -66,9 +65,11 @@ mapping, problems = [], []
 for email in sorted(groups):
     group = sorted(groups[email], key=lambda r: (str(r.get("createdAt") or ""), r["key"]))
     keys = [r["key"] for r in group]
-    guard = accounts.get_item(Key={"partnerId": f"EMAIL#{email}"}).get("Item")
+    # Existing account for this email (oldest first, as the API picks it).
+    found = accounts.query(IndexName="email-index", KeyConditionExpression=Key("email").eq(email)).get("Items", [])
+    found.sort(key=lambda a: (str(a.get("createdAt") or ""), a["partnerId"]))
     row_ids = {r["partnerId"] for r in group if r.get("partnerId")}
-    owner = guard.get("ownerPartnerId") if guard else None
+    owner = found[0]["partnerId"] if found else None
 
     if len(row_ids | ({owner} if owner else set())) > 1:
         problems.append(f"{email}: keys already belong to different partnerIds {sorted(row_ids | {owner})} - left as is")
@@ -81,7 +82,7 @@ for email in sorted(groups):
     has_account = bool(accounts.get_item(Key={"partnerId": partner_id}).get("Item"))
 
     label = f"{partner_id}  {email}  [{', '.join(keys)}]"
-    if has_account and guard and not todo:
+    if has_account and not todo:
         stats["already done"] += 1
         continue
     print(("+ " if not has_account else "~ ") + label)
@@ -97,10 +98,6 @@ for email in sorted(groups):
                       "migratedAt": now},
                 ConditionExpression=Attr("partnerId").not_exists())
             stats["accounts created"] += 1
-        if not guard:
-            accounts.put_item(
-                Item={"partnerId": f"EMAIL#{email}", "ownerPartnerId": partner_id, "email": email, "createdAt": now},
-                ConditionExpression=Attr("partnerId").not_exists())
         for r in todo:
             keys_table.update_item(
                 Key={"key": r["key"]},
