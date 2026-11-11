@@ -121,6 +121,45 @@ Rules:
 	- update Order status to `PAID`
 	- invoke one Lambda asynchronously based on order type + provider
 
+### Partners (v2)
+
+A partner is identified by a `partnerId` (`PTN-` + 8 characters, e.g.
+`PTN-7K2M9QXA`) that never changes. Their login email and their affiliate keys
+(`go.artamobile.id/<key>`) can change; the partnerId ties them, their orders and
+their wallet together. Orders keep the key they came through (`Order.partner`).
+
+Partner routes (the partner portal's Auth0 token; the account is the one for
+the token's email, never one named in the request):
+
+- `GET /v2/partner/keys/:key/exists` - public; `{ "exist": true | false }`
+- `POST /v2/partner/register` - `{ "key": "budi" }`. The first key creates the account; later keys join it. 409 `KEY_TAKEN`.
+- `GET /v2/partner/me` - account and all its keys
+- `GET /v2/partner/me/orders` - paid eSIM orders through any of the partner's keys, newest first (customer masked, commission as `price`). 404 `Partner not found` when the email has no account.
+
+Finance routes (arta-admin token with the `finance` role):
+
+- `GET /v2/admin/partners` - every partner with its keys
+- `GET /v2/admin/partners/:partnerId`
+- `PATCH /v2/admin/partners/:partnerId` - `{ "email": "new@example.com", "name": "Budi" }` (either or both). 409 `EMAIL_TAKEN` when another partner logs in with that email.
+- `POST /v2/admin/partners/:partnerId/keys` - `{ "key": "budi-promo" }`
+
+DynamoDB:
+
+| Table | Key | Global secondary indexes |
+|---|---|---|
+| `PartnerAccount` | `partnerId` (S) | `email-index`: `email` (S), projection ALL |
+| `Partner` (existing, one row per key) | `key` (S) | `partnerId-index`: `partnerId` (S), projection ALL |
+
+DynamoDB cannot make an indexed value unique, so one account per login email is
+kept by checking the `email-index` before creating an account and re-checking
+about a second later (`PARTNER_RECHECK_DELAY_MS`, default 1000): if a parallel
+sign-up created a second account, the newer one moves its keys to the oldest
+and is deleted. Should a duplicate ever remain, login uses the oldest account
+and `GET /v2/admin/partners` marks both with `duplicateEmail: true`.
+
+Key rows keep `email` too, for the old `/v1/partner` Lambdas while they still
+run.
+
 ### Partner Payouts (v2)
 
 Semi-automated payouts for affiliate partners. Finance credits each partner's
@@ -137,15 +176,15 @@ balance. A partner has at most one open withdrawal.
 Partner routes (the portal's own Auth0 token; the wallet is the one for the
 token's email claim):
 
-- `GET /v2/partner/wallet` - balance, amount on hold, minimum, open withdrawal, history
+- `GET /v2/partner/wallet` - balance, amount on hold, minimum, open withdrawal, history (404 `PARTNER_NOT_FOUND` when the login email has no partner account)
 - `POST /v2/partner/withdrawals` - `{ "amount": 750000, "bankAccount": { "bankName": "BCA", "accountNumber": "1234567890", "accountName": "Budi Santoso" }, "note": "optional" }`
 - `POST /v2/partner/withdrawals/:withdrawalId/cancel`
 
 Finance routes (arta-admin access token with the Auth0 `finance` role):
 
 - `GET /v2/admin/partner-wallets`
-- `GET /v2/admin/partner-wallets/:email` - wallet with ledger and withdrawals
-- `POST /v2/admin/partner-wallets/adjustments` - `{ "email": "budi@example.com", "type": "CREDIT" | "DEBIT", "amount": 750000, "note": "Komisi Oktober 2026", "entryId": "<uuid>", "partnerKey": "budi", "partnerName": "Budi" }`. `entryId` makes a retried submit a no-op (409 `DUPLICATE_ENTRY`); the first credit creates the wallet.
+- `GET /v2/admin/partner-wallets/:partnerId` - wallet with ledger and withdrawals
+- `POST /v2/admin/partner-wallets/adjustments` - `{ "partnerId": "PTN-7K2M9QXA", "type": "CREDIT" | "DEBIT", "amount": 750000, "note": "Komisi Oktober 2026", "entryId": "<uuid>", "partnerKey": "budi", "partnerName": "Budi" }`. `email` (the partner's login email) may be given instead of `partnerId`. `entryId` makes a retried submit a no-op (409 `DUPLICATE_ENTRY`); the first credit creates the wallet.
 - `GET /v2/admin/partner-withdrawals?status=PENDING_REVIEW,APPROVED` (default: open ones)
 - `GET /v2/admin/partner-withdrawals/:withdrawalId`
 - `POST /v2/admin/partner-withdrawals/:withdrawalId/approve`
@@ -156,12 +195,16 @@ DynamoDB tables (on-demand capacity is fine):
 
 | Table | Key | Global secondary indexes |
 |---|---|---|
-| `PartnerWallet` | `email` (S) | - |
-| `PartnerLedger` | `entryId` (S) | `email-createdAt-index`: `email` (S) + `createdAt` (S), projection ALL |
-| `PartnerWithdrawal` | `withdrawalId` (S) | `status-createdAt-index`: `status` (S) + `createdAt` (S); `email-createdAt-index`: `email` (S) + `createdAt` (S); both projection ALL |
+| `PartnerWallet` | `partnerId` (S) | - |
+| `PartnerLedger` | `entryId` (S) | `partnerId-createdAt-index`: `partnerId` (S) + `createdAt` (S), projection ALL |
+| `PartnerWithdrawal` | `withdrawalId` (S) | `status-createdAt-index`: `status` (S) + `createdAt` (S); `partnerId-createdAt-index`: `partnerId` (S) + `createdAt` (S); both projection ALL |
 
-The Lambda role needs `GetItem`, `PutItem`, `UpdateItem`, `Query`, `Scan` and
-`TransactWriteItems` on these tables and their indexes.
+Every row also stores the partner's email at the time, for emails and for
+finance to read; the partnerId is what links them.
+
+The Lambda role needs `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `Query`,
+`Scan` and `TransactWriteItems` on these tables, `PartnerAccount` and `Partner`,
+and their indexes, plus `Query` on `Order/index/partner-createdAt-index`.
 
 Environment:
 

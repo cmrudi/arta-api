@@ -5,8 +5,8 @@ import {
   createPartnerWithdrawal,
   getPartnerWallet,
   getPartnerWithdrawalById,
-  queryPartnerLedgerByEmail,
-  queryPartnerWithdrawalsByEmail,
+  queryPartnerLedgerByPartnerId,
+  queryPartnerWithdrawalsByPartnerId,
   queryPartnerWithdrawalsByStatus,
   scanPartnerWallets,
   transitionPartnerWithdrawal,
@@ -21,6 +21,8 @@ import {
   WithdrawalStatus,
   minWithdrawalAmount,
 } from '../models/partnerPayout';
+import { isPartnerId } from '../models/partner';
+import { findPartnerByEmail, findPartnerById } from './partnerService';
 import { sendPartnerPayoutEmail } from './partnerPayoutEmailService';
 
 const HISTORY_LIMIT = 50;
@@ -42,6 +44,8 @@ const isConditionFailure = (error: unknown): boolean =>
 
 export type PayoutFailureReason =
   | 'INVALID_EMAIL'
+  | 'INVALID_PARTNER_ID'
+  | 'PARTNER_NOT_FOUND'
   | 'INVALID_AMOUNT'
   | 'AMOUNT_BELOW_MINIMUM'
   | 'INSUFFICIENT_BALANCE'
@@ -74,6 +78,7 @@ const fail = (reason: PayoutFailureReason, message: string, extra: Record<string
 // Shapes returned to the clients
 
 export type WalletView = {
+  partnerId: string;
   email: string;
   partnerKey?: string;
   partnerName?: string;
@@ -87,7 +92,8 @@ export type WalletView = {
   updatedAt?: string;
 };
 
-const toWalletView = (email: string, item?: Record<string, unknown>): WalletView => ({
+const toWalletView = (partnerId: string, email: string, item?: Record<string, unknown>): WalletView => ({
+  partnerId,
   email,
   partnerKey: str(item?.partnerKey) || undefined,
   partnerName: str(item?.partnerName) || undefined,
@@ -179,20 +185,43 @@ export const toPartnerWithdrawalView = (withdrawal: Record<string, unknown>): Re
   };
 };
 
-export const getPartnerPayoutSummary = async (rawEmail: string): Promise<PartnerPayoutSummary> => {
-  const email = normalizeEmail(rawEmail);
+const partnerNotFound = (): PayoutFailure =>
+  fail('PARTNER_NOT_FOUND', 'no partner account for this login email');
+
+/**
+ * The finance-facing copy of a withdrawal with the partner's *current* email,
+ * so a payout email reaches them even if their address changed after the
+ * request was made.
+ */
+const withCurrentEmail = async (withdrawal: Record<string, unknown>): Promise<Record<string, unknown>> => {
+  const account = await findPartnerById(str(withdrawal.partnerId));
+
+  return account ? { ...withdrawal, email: account.email } : withdrawal;
+};
+
+export const getPartnerPayoutSummary = async (
+  rawEmail: string,
+): Promise<({ success: true } & PartnerPayoutSummary) | PayoutFailure> => {
+  const account = await findPartnerByEmail(rawEmail);
+
+  if (!account) {
+    return partnerNotFound();
+  }
+
+  const { partnerId, email } = account;
   const [walletResult, withdrawals, ledger] = await Promise.all([
-    getPartnerWallet(email),
-    queryPartnerWithdrawalsByEmail(email, HISTORY_LIMIT),
-    queryPartnerLedgerByEmail(email, HISTORY_LIMIT),
+    getPartnerWallet(partnerId),
+    queryPartnerWithdrawalsByPartnerId(partnerId, HISTORY_LIMIT),
+    queryPartnerLedgerByPartnerId(partnerId, HISTORY_LIMIT),
   ]);
-  const wallet = toWalletView(email, walletResult.Item);
+  const wallet = toWalletView(partnerId, email, walletResult.Item);
   const openWithdrawal = wallet.openWithdrawalId
     ? withdrawals.find((item) => item.withdrawalId === wallet.openWithdrawalId) ||
       (await getPartnerWithdrawalById(wallet.openWithdrawalId)).Item
     : undefined;
 
   return {
+    success: true,
     wallet,
     minWithdrawal: minWithdrawalAmount(),
     openWithdrawal: openWithdrawal ? toPartnerWithdrawalView(openWithdrawal) : undefined,
@@ -211,7 +240,6 @@ export const requestPartnerWithdrawal = async (params: {
   bankAccount: unknown;
   note?: unknown;
 }): Promise<WithdrawalResult> => {
-  const email = normalizeEmail(params.email);
   const amount = parseAmount(params.amount);
   const minimum = minWithdrawalAmount();
 
@@ -238,13 +266,20 @@ export const requestPartnerWithdrawal = async (params: {
     return fail('NOTE_TOO_LONG', `note must be at most ${MAX_PAYOUT_NOTE_LENGTH} characters`);
   }
 
-  const walletItem = (await getPartnerWallet(email)).Item;
+  const account = await findPartnerByEmail(params.email);
+
+  if (!account) {
+    return partnerNotFound();
+  }
+
+  const { partnerId, email } = account;
+  const walletItem = (await getPartnerWallet(partnerId)).Item;
 
   if (!walletItem) {
     return fail('INSUFFICIENT_BALANCE', 'there is no balance to withdraw yet', { balance: 0 });
   }
 
-  const wallet = toWalletView(email, walletItem);
+  const wallet = toWalletView(partnerId, email, walletItem);
 
   if (wallet.openWithdrawalId) {
     return fail('WITHDRAWAL_OPEN', 'a withdrawal is already being processed', {
@@ -262,6 +297,7 @@ export const requestPartnerWithdrawal = async (params: {
   const withdrawalId = `WD-${randomUUID().slice(0, 8).toUpperCase()}`;
   const withdrawal: PartnerWithdrawal = {
     withdrawalId,
+    partnerId,
     email,
     ...(wallet.partnerKey ? { partnerKey: wallet.partnerKey } : {}),
     ...(wallet.partnerName ? { partnerName: wallet.partnerName } : {}),
@@ -275,6 +311,7 @@ export const requestPartnerWithdrawal = async (params: {
   };
   const entry: PartnerLedgerEntry = {
     entryId: `${withdrawalId}-HOLD`,
+    partnerId,
     email,
     type: 'WITHDRAWAL',
     amount: -amount,
@@ -288,7 +325,7 @@ export const requestPartnerWithdrawal = async (params: {
   } catch (error) {
     if (isConditionFailure(error)) {
       // Lost a race with another tab or a finance debit: re-read and explain.
-      const fresh = toWalletView(email, (await getPartnerWallet(email)).Item);
+      const fresh = toWalletView(partnerId, email, (await getPartnerWallet(partnerId)).Item);
 
       return fresh.openWithdrawalId
         ? fail('WITHDRAWAL_OPEN', 'a withdrawal is already being processed', {
@@ -309,6 +346,7 @@ export const requestPartnerWithdrawal = async (params: {
 
 const returnEntryFor = (withdrawal: Record<string, unknown>, by: string, at: string, note?: string): PartnerLedgerEntry => ({
   entryId: `${str(withdrawal.withdrawalId)}-RETURN`,
+  partnerId: str(withdrawal.partnerId),
   email: str(withdrawal.email),
   type: 'WITHDRAWAL_RETURNED',
   amount: num(withdrawal.amount),
@@ -326,14 +364,20 @@ export const cancelPartnerWithdrawal = async (
   rawEmail: string,
   withdrawalId: string,
 ): Promise<WithdrawalResult> => {
-  const email = normalizeEmail(rawEmail);
+  const account = await findPartnerByEmail(rawEmail);
+
+  if (!account) {
+    return partnerNotFound();
+  }
+
+  const email = account.email;
   const withdrawal = await loadWithdrawal(withdrawalId);
 
   if (!withdrawal) {
     return fail('WITHDRAWAL_NOT_FOUND', 'withdrawal not found');
   }
 
-  if (normalizeEmail(withdrawal.email) !== email) {
+  if (str(withdrawal.partnerId) !== account.partnerId) {
     return fail('NOT_OWNER', 'this withdrawal belongs to another partner');
   }
 
@@ -357,25 +401,34 @@ export const listPartnerWallets = async (): Promise<WalletView[]> => {
   const items = await scanPartnerWallets();
 
   return items
-    .map((item) => toWalletView(str(item.email), item))
+    .map((item) => toWalletView(str(item.partnerId), str(item.email), item))
     .sort((a, b) => b.balance + b.onHold - (a.balance + a.onHold) || a.email.localeCompare(b.email));
 };
 
 export const getPartnerWalletDetail = async (
-  rawEmail: string,
+  partnerId: string,
 ): Promise<{ success: true; wallet: WalletView; ledger: Record<string, unknown>[]; withdrawals: Record<string, unknown>[] } | PayoutFailure> => {
-  const email = normalizeEmail(rawEmail);
-  const [walletResult, ledger, withdrawals] = await Promise.all([
-    getPartnerWallet(email),
-    queryPartnerLedgerByEmail(email, HISTORY_LIMIT),
-    queryPartnerWithdrawalsByEmail(email, HISTORY_LIMIT),
+  if (!isPartnerId(partnerId)) {
+    return fail('INVALID_PARTNER_ID', 'partnerId looks like PTN-XXXXXXXX');
+  }
+
+  const [account, walletResult, ledger, withdrawals] = await Promise.all([
+    findPartnerById(partnerId),
+    getPartnerWallet(partnerId),
+    queryPartnerLedgerByPartnerId(partnerId, HISTORY_LIMIT),
+    queryPartnerWithdrawalsByPartnerId(partnerId, HISTORY_LIMIT),
   ]);
 
   if (!walletResult.Item) {
-    return fail('WALLET_NOT_FOUND', 'no wallet for this email');
+    return fail('WALLET_NOT_FOUND', 'this partner has no wallet yet');
   }
 
-  return { success: true, wallet: toWalletView(email, walletResult.Item), ledger, withdrawals };
+  return {
+    success: true,
+    wallet: toWalletView(partnerId, account?.email || str(walletResult.Item.email), walletResult.Item),
+    ledger,
+    withdrawals,
+  };
 };
 
 export type AdjustmentResult =
@@ -387,7 +440,8 @@ export type AdjustmentResult =
  * note is required: it is what the partner sees in their balance history.
  */
 export const adjustPartnerBalance = async (params: {
-  email: unknown;
+  partnerId?: unknown;
+  email?: unknown;
   type: unknown;
   amount: unknown;
   note: unknown;
@@ -396,12 +450,26 @@ export const adjustPartnerBalance = async (params: {
   partnerName?: unknown;
   by: string;
 }): Promise<AdjustmentResult> => {
-  const email = normalizeEmail(params.email);
+  // Finance names the partner by partnerId; an email is accepted as a shortcut
+  // and resolved to the account that logs in with it.
+  const requestedId = str(params.partnerId);
+  const requestedEmail = normalizeEmail(params.email);
 
-  if (!EMAIL_PATTERN.test(email)) {
-    return fail('INVALID_EMAIL', 'email must be the address the partner logs in with');
+  if (requestedId && !isPartnerId(requestedId)) {
+    return fail('INVALID_PARTNER_ID', 'partnerId looks like PTN-XXXXXXXX');
   }
 
+  if (!requestedId && !EMAIL_PATTERN.test(requestedEmail)) {
+    return fail('INVALID_EMAIL', 'give the partnerId, or the email the partner logs in with');
+  }
+
+  const account = requestedId ? await findPartnerById(requestedId) : await findPartnerByEmail(requestedEmail);
+
+  if (!account) {
+    return fail('PARTNER_NOT_FOUND', 'no partner account found');
+  }
+
+  const { partnerId, email } = account;
   const type = params.type === 'DEBIT' ? 'DEBIT' : params.type === 'CREDIT' ? 'CREDIT' : null;
   const amount = parseAmount(params.amount);
 
@@ -432,6 +500,7 @@ export const adjustPartnerBalance = async (params: {
   const partnerName = str(params.partnerName).slice(0, 100) || undefined;
   const entry: PartnerLedgerEntry = {
     entryId: requestedEntryId || randomUUID(),
+    partnerId,
     email,
     type,
     amount: type === 'CREDIT' ? amount : -amount,
@@ -448,13 +517,13 @@ export const adjustPartnerBalance = async (params: {
     }
 
     const cancellation = (error as { CancellationReasons?: Array<{ Code?: string }> }).CancellationReasons;
-    const walletItem = (await getPartnerWallet(email)).Item;
+    const walletItem = (await getPartnerWallet(partnerId)).Item;
 
     // The ledger Put is first in the transaction: a failure there means this
     // exact entry was already posted (a retried submit).
     if (cancellation?.[0]?.Code === 'ConditionalCheckFailed') {
       return fail('DUPLICATE_ENTRY', 'this adjustment was already posted', {
-        wallet: toWalletView(email, walletItem),
+        wallet: toWalletView(partnerId, email, walletItem),
       });
     }
 
@@ -470,7 +539,7 @@ export const adjustPartnerBalance = async (params: {
   return {
     success: true,
     entry,
-    wallet: toWalletView(email, (await getPartnerWallet(email)).Item),
+    wallet: toWalletView(partnerId, email, (await getPartnerWallet(partnerId)).Item),
   };
 };
 
@@ -501,7 +570,7 @@ const runTransition = async (
     await transitionPartnerWithdrawal({
       withdrawal: {
         withdrawalId: str(withdrawal.withdrawalId),
-        email: str(withdrawal.email),
+        partnerId: str(withdrawal.partnerId),
         amount: num(withdrawal.amount),
       },
       from: params.from,
@@ -588,7 +657,7 @@ export const rejectPartnerWithdrawal = async (
   });
 
   if (result.success) {
-    await sendPartnerPayoutEmail('REJECTED', result.withdrawal);
+    await sendPartnerPayoutEmail('REJECTED', await withCurrentEmail(result.withdrawal));
   }
 
   return result;
@@ -637,7 +706,7 @@ export const markPartnerWithdrawalPaid = async (
   });
 
   if (result.success) {
-    await sendPartnerPayoutEmail('PAID', result.withdrawal);
+    await sendPartnerPayoutEmail('PAID', await withCurrentEmail(result.withdrawal));
   }
 
   return result;
