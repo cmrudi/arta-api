@@ -1,16 +1,13 @@
 import {
-  createPartnerAccountWithKey,
+  createPartnerAccount,
   deletePartnerAccount,
   getPartnerAccount,
-  getPartnerKey,
-  putPartnerKey,
   queryPartnerAccountsByEmail,
-  queryPartnerKeysByPartnerId,
-  queryPublishedEsimOrdersByPartnerKey,
-  reassignPartnerKey,
+  queryPartnerAccountsByKey,
+  queryPublishedEsimOrdersByPartnerId,
   scanPartnerAccounts,
-  scanPartnerKeys,
   setPartnerAccountEmail,
+  setPartnerAccountKey,
   updatePartnerAccountName,
 } from '../lib/dynamoDb';
 import {
@@ -31,16 +28,11 @@ const isConditionFailure = (error: unknown): boolean =>
   error instanceof Error &&
   (error.name === 'TransactionCanceledException' || error.name === 'ConditionalCheckFailedException');
 
-const cancellationCodes = (error: unknown): Array<string | undefined> =>
-  ((error as { CancellationReasons?: Array<{ Code?: string }> }).CancellationReasons || []).map(
-    (reason) => reason?.Code,
-  );
-
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * How long to wait before the re-check. The email index trails the table by
- * up to about a second, so re-checking at once could miss a duplicate that a
+ * How long to wait before the re-check. The indexes trail the table by up to
+ * about a second, so re-checking at once could miss a duplicate that a
  * parallel request has just written.
  */
 const recheckDelayMs = (): number => {
@@ -49,66 +41,73 @@ const recheckDelayMs = (): number => {
   return Number.isFinite(value) && value >= 0 ? value : 1000;
 };
 
-/** The account that keeps an email when there are several: the oldest. */
-const byAge = (a: PartnerAccount, b: PartnerAccount): number =>
-  a.createdAt.localeCompare(b.createdAt) || a.partnerId.localeCompare(b.partnerId);
-
 export type PartnerFailureReason =
   | 'INVALID_KEY'
   | 'KEY_TAKEN'
   | 'INVALID_EMAIL'
   | 'EMAIL_TAKEN'
+  | 'ALREADY_REGISTERED'
   | 'INVALID_NAME'
   | 'INVALID_PARTNER_ID'
   | 'PARTNER_NOT_FOUND'
   | 'CONFLICT';
 
-export type PartnerFailure = { success: false; reason: PartnerFailureReason; message: string };
+export type PartnerFailure = { success: false; reason: PartnerFailureReason; message: string } & Record<
+  string,
+  unknown
+>;
 
-const fail = (reason: PartnerFailureReason, message: string): PartnerFailure => ({
+const fail = (reason: PartnerFailureReason, message: string, extra: Record<string, unknown> = {}): PartnerFailure => ({
   success: false,
   reason,
   message,
+  ...extra,
 });
 
 const toAccount = (item: Record<string, unknown>): PartnerAccount => ({
   partnerId: str(item.partnerId),
   email: str(item.email),
+  key: str(item.key),
+  ...(Array.isArray(item.previousKeys) && item.previousKeys.length
+    ? { previousKeys: item.previousKeys.map((value) => str(value)).filter(Boolean) }
+    : {}),
   ...(str(item.name) ? { name: str(item.name) } : {}),
   createdAt: str(item.createdAt),
   updatedAt: str(item.updatedAt),
 });
 
-export type PartnerKeyView = { key: string; createdAt?: string };
+/** The account that keeps an email or key when there are several: the oldest. */
+const byAge = (a: PartnerAccount, b: PartnerAccount): number =>
+  a.createdAt.localeCompare(b.createdAt) || a.partnerId.localeCompare(b.partnerId);
 
-// Oldest first. Rows created before keys had dates sort first.
-const toKeyViews = (items: Record<string, unknown>[]): PartnerKeyView[] =>
+// Only real PTN-... accounts count; any other row that happens to carry an
+// email or key (e.g. left over from an earlier layout) is ignored.
+const realAccounts = (items: Record<string, unknown>[]): PartnerAccount[] =>
   items
-    .map((item) => ({ key: str(item.key), ...(str(item.createdAt) ? { createdAt: str(item.createdAt) } : {}) }))
-    .filter((item) => item.key)
-    .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || '') || a.key.localeCompare(b.key));
-
-/** The key the portal shows as "your link": the most recently created one. */
-const primaryKeyOf = (keys: PartnerKeyView[]): string | undefined => keys[keys.length - 1]?.key;
-
-// ---------------------------------------------------------------------------
-// Lookups
-
-/**
- * Every account with this email, oldest first. Normally zero or one. Only real
- * PTN-... accounts count: any other row in the table that carries an email
- * (such as the EMAIL# rows an earlier version wrote) is ignored.
- */
-const accountsWithEmail = async (email: string): Promise<PartnerAccount[]> =>
-  (await queryPartnerAccountsByEmail(email))
     .map(toAccount)
     .filter((account) => isPartnerId(account.partnerId))
     .sort(byAge);
+
+/** Every account with this email / key, oldest first. Normally zero or one. */
+const accountsWithEmail = async (email: string): Promise<PartnerAccount[]> =>
+  realAccounts(await queryPartnerAccountsByEmail(email));
+
+const accountsWithKey = async (key: string): Promise<PartnerAccount[]> =>
+  realAccounts(await queryPartnerAccountsByKey(key));
+
+// ---------------------------------------------------------------------------
+// Lookups
 
 export const findPartnerByEmail = async (rawEmail: string): Promise<PartnerAccount | undefined> => {
   const email = normalizePartnerEmail(rawEmail);
 
   return email ? (await accountsWithEmail(email))[0] : undefined;
+};
+
+export const findPartnerByKey = async (rawKey: string): Promise<PartnerAccount | undefined> => {
+  const key = normalizePartnerKey(rawKey);
+
+  return key ? (await accountsWithKey(key))[0] : undefined;
 };
 
 export const findPartnerById = async (partnerId: string): Promise<PartnerAccount | undefined> => {
@@ -121,71 +120,25 @@ export const findPartnerById = async (partnerId: string): Promise<PartnerAccount
   return account ? toAccount(account) : undefined;
 };
 
-export const listKeysOfPartner = async (partnerId: string): Promise<PartnerKeyView[]> =>
-  toKeyViews(await queryPartnerKeysByPartnerId(partnerId));
-
-export const partnerKeyExists = async (rawKey: string): Promise<boolean> => {
-  const key = normalizePartnerKey(rawKey);
-
-  return key ? Boolean((await getPartnerKey(key)).Item) : false;
-};
+export const partnerKeyExists = async (rawKey: string): Promise<boolean> => Boolean(await findPartnerByKey(rawKey));
 
 // ---------------------------------------------------------------------------
 // Partner portal
 
-/**
- * Re-check after creating an account: if a parallel request created another
- * account for the same email, the newer one gives its keys to the oldest and
- * is deleted. Both requests run this, and both agree on which is oldest.
- * Returns the partnerId that keeps the email.
- */
-const settleDuplicateAccounts = async (email: string, mine: string, myKey: string): Promise<string> => {
-  await sleep(recheckDelayMs());
-
-  const accounts = await accountsWithEmail(email);
-  const keeper = accounts[0];
-
-  if (!keeper || keeper.partnerId === mine || !accounts.some((item) => item.partnerId === mine)) {
-    return mine;
-  }
-
-  // The key we just wrote may not be in the partnerId index yet, so move it by
-  // name as well as anything the index already shows.
-  const keys = new Set([myKey, ...(await queryPartnerKeysByPartnerId(mine)).map((item) => str(item.key))]);
-
-  for (const key of keys) {
-    try {
-      await reassignPartnerKey({ key, from: mine, to: keeper.partnerId });
-    } catch (error) {
-      if (!isConditionFailure(error)) {
-        throw error;
-      }
-    }
-  }
-
-  await deletePartnerAccount(mine).catch((error) => {
-    if (!isConditionFailure(error)) {
-      throw error;
-    }
-  });
-  console.warn('[partner] merged a duplicate account created in parallel', { email, removed: mine, kept: keeper.partnerId });
-
-  return keeper.partnerId;
-};
-
 export type RegisterResult =
-  | { success: true; partnerId: string; key: string; createdAccount: boolean }
+  | { success: true; partnerId: string; key: string; createdAccount: true }
   | PartnerFailure;
 
 /**
- * The logged-in user claims an affiliate key. Their first key creates their
- * partner account; any later key joins the same account. The email is the one
- * on their token, never one from the request body.
+ * The logged-in user becomes a partner with the key they chose. One account
+ * per email and one key per account; the email is the one on their token,
+ * never one from the request body.
  *
- * One account per email: check before creating, re-check after (see
- * settleDuplicateAccounts).
+ * Uniqueness of email and key: check before creating, re-check after. If a
+ * parallel request created a clashing account meanwhile, the newer account
+ * (by createdAt, then partnerId - both requests agree) deletes itself.
  */
-export const registerPartnerKey = async (params: { email: string; key: unknown }): Promise<RegisterResult> => {
+export const registerPartner = async (params: { email: string; key: unknown }): Promise<RegisterResult> => {
   const email = normalizePartnerEmail(params.email);
   const key = normalizePartnerKey(params.key);
 
@@ -197,51 +150,69 @@ export const registerPartnerKey = async (params: { email: string; key: unknown }
     return fail('INVALID_EMAIL', 'the login email is not a valid address');
   }
 
-  const now = new Date().toISOString();
   const existing = (await accountsWithEmail(email))[0];
 
   if (existing) {
-    try {
-      await putPartnerKey({ key, partnerId: existing.partnerId, email, createdAt: now });
-    } catch (error) {
-      if (isConditionFailure(error)) {
-        return fail('KEY_TAKEN', 'this key is already used');
-      }
-
-      throw error;
-    }
-
-    return { success: true, partnerId: existing.partnerId, key, createdAccount: false };
+    return fail('ALREADY_REGISTERED', 'this email already has a partner account', {
+      partnerId: existing.partnerId,
+      key: existing.key,
+    });
   }
 
+  if ((await accountsWithKey(key)).length > 0) {
+    return fail('KEY_TAKEN', 'this key is already used');
+  }
+
+  const now = new Date().toISOString();
+  let partnerId = '';
+
   // Two attempts only to survive a (practically impossible) partnerId collision.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const partnerId = newPartnerId();
+  for (let attempt = 0; attempt < 2 && !partnerId; attempt += 1) {
+    const candidate = newPartnerId();
 
     try {
-      await createPartnerAccountWithKey({
-        account: { partnerId, email, createdAt: now, updatedAt: now },
-        key: { key, partnerId, email, createdAt: now },
-      });
+      await createPartnerAccount({ partnerId: candidate, email, key, createdAt: now, updatedAt: now });
+      partnerId = candidate;
     } catch (error) {
       if (!isConditionFailure(error)) {
         throw error;
       }
-
-      // Transaction order: [account, key].
-      if (cancellationCodes(error)[1] === 'ConditionalCheckFailed') {
-        return fail('KEY_TAKEN', 'this key is already used');
-      }
-
-      continue;
     }
-
-    const kept = await settleDuplicateAccounts(email, partnerId, key);
-
-    return { success: true, partnerId: kept, key, createdAccount: kept === partnerId };
   }
 
-  return fail('CONFLICT', 'could not register the key; please try again');
+  if (!partnerId) {
+    return fail('CONFLICT', 'could not register; please try again');
+  }
+
+  await sleep(recheckDelayMs());
+
+  const [sameEmail, sameKey] = await Promise.all([accountsWithEmail(email), accountsWithKey(key)]);
+  const keyKeeper = sameKey[0];
+  const emailKeeper = sameEmail[0];
+  const lostKey = keyKeeper && keyKeeper.partnerId !== partnerId;
+  const lostEmail = emailKeeper && emailKeeper.partnerId !== partnerId;
+
+  if (lostKey || lostEmail) {
+    await deletePartnerAccount(partnerId).catch((error) => {
+      if (!isConditionFailure(error)) {
+        throw error;
+      }
+    });
+    console.warn('[partner] removed an account that clashed with a parallel sign-up', {
+      email,
+      key,
+      removed: partnerId,
+    });
+
+    return lostEmail
+      ? fail('ALREADY_REGISTERED', 'this email already has a partner account', {
+          partnerId: emailKeeper.partnerId,
+          key: emailKeeper.key,
+        })
+      : fail('KEY_TAKEN', 'this key is already used');
+  }
+
+  return { success: true, partnerId, key, createdAccount: true };
 };
 
 const maskEmail = (value = ''): string => value.replace(/(^.).*(@.).*$/, (_m, a, b) => `${a}***${b}***`);
@@ -278,21 +249,22 @@ const toPartnerOrder = (order: Record<string, unknown>): Record<string, unknown>
   return out;
 };
 
-const ORDERS_PER_KEY_CAP = 1000;
+const ORDERS_CAP = 2000;
 
 export type PartnerOrdersResult =
   | {
       success: true;
       partnerId: string;
-      key?: string;
-      keys: PartnerKeyView[];
+      key: string;
+      /** Kept for the portal, which lists "other links" from it; one entry now. */
+      keys: Array<{ key: string }>;
       items: Record<string, unknown>[];
       count: number;
       lastEvaluatedKey: null;
     }
   | PartnerFailure;
 
-/** Every paid eSIM sale through any of the partner's keys, newest first. */
+/** The partner's paid eSIM sales, newest first, whatever key they came through. */
 export const getPartnerOrders = async (rawEmail: string): Promise<PartnerOrdersResult> => {
   const account = await findPartnerByEmail(rawEmail);
 
@@ -301,18 +273,13 @@ export const getPartnerOrders = async (rawEmail: string): Promise<PartnerOrdersR
     return fail('PARTNER_NOT_FOUND', 'Partner not found');
   }
 
-  const keys = await listKeysOfPartner(account.partnerId);
-  const pages = await Promise.all(keys.map((item) => queryPublishedEsimOrdersByPartnerKey(item.key, ORDERS_PER_KEY_CAP)));
-  const items = pages
-    .flat()
-    .sort((a, b) => str(b.createdAt).localeCompare(str(a.createdAt)))
-    .map(toPartnerOrder);
+  const items = (await queryPublishedEsimOrdersByPartnerId(account.partnerId, ORDERS_CAP)).map(toPartnerOrder);
 
   return {
     success: true,
     partnerId: account.partnerId,
-    key: primaryKeyOf(keys),
-    keys,
+    key: account.key,
+    keys: account.key ? [{ key: account.key }] : [],
     items,
     count: items.length,
     lastEvaluatedKey: null,
@@ -323,44 +290,28 @@ export const getPartnerOrders = async (rawEmail: string): Promise<PartnerOrdersR
 // Finance / admin
 
 export type PartnerView = PartnerAccount & {
-  keys: PartnerKeyView[];
-  /** Another account has the same login email (should not happen; see models/partner.ts). */
+  /** Another account has the same login email or key (should not happen). */
   duplicateEmail?: boolean;
+  duplicateKey?: boolean;
 };
 
 export const listPartners = async (): Promise<PartnerView[]> => {
-  const [accounts, keyRows] = await Promise.all([scanPartnerAccounts(PARTNER_ID_PREFIX), scanPartnerKeys()]);
-  const keysByPartner = new Map<string, Record<string, unknown>[]>();
-
-  for (const row of keyRows) {
-    const partnerId = str(row.partnerId);
-
-    if (partnerId) {
-      keysByPartner.set(partnerId, [...(keysByPartner.get(partnerId) || []), row]);
-    }
-  }
-
-  const emailCounts = new Map<string, number>();
-
-  for (const item of accounts) {
-    const email = str(item.email);
-    emailCounts.set(email, (emailCounts.get(email) || 0) + 1);
-  }
+  const accounts = realAccounts(await scanPartnerAccounts(PARTNER_ID_PREFIX));
+  const count = (values: string[]) =>
+    values.reduce((map, value) => map.set(value, (map.get(value) || 0) + 1), new Map<string, number>());
+  const emails = count(accounts.map((account) => account.email));
+  const keys = count(accounts.map((account) => account.key).filter(Boolean));
 
   return accounts
-    .map((item) => {
-      const account = toAccount(item);
-
-      return {
-        ...account,
-        keys: toKeyViews(keysByPartner.get(account.partnerId) || []),
-        ...((emailCounts.get(account.email) || 0) > 1 ? { duplicateEmail: true } : {}),
-      };
-    })
+    .map((account) => ({
+      ...account,
+      ...((emails.get(account.email) || 0) > 1 ? { duplicateEmail: true } : {}),
+      ...(account.key && (keys.get(account.key) || 0) > 1 ? { duplicateKey: true } : {}),
+    }))
     .sort((a, b) => a.email.localeCompare(b.email) || byAge(a, b));
 };
 
-export type PartnerDetailResult = { success: true; partner: PartnerView } | PartnerFailure;
+export type PartnerDetailResult = { success: true; partner: PartnerAccount } | PartnerFailure;
 
 export const getPartnerDetail = async (partnerId: string): Promise<PartnerDetailResult> => {
   if (!isPartnerId(partnerId)) {
@@ -369,20 +320,63 @@ export const getPartnerDetail = async (partnerId: string): Promise<PartnerDetail
 
   const account = await findPartnerById(partnerId);
 
-  if (!account) {
-    return fail('PARTNER_NOT_FOUND', 'partner not found');
-  }
-
-  return { success: true, partner: { ...account, keys: await listKeysOfPartner(partnerId) } };
+  return account ? { success: true, partner: account } : fail('PARTNER_NOT_FOUND', 'partner not found');
 };
 
 /**
- * Finance changes a partner's login email and/or display name. The partnerId,
- * keys, orders, wallet and history stay as they are.
+ * Change one unique field (email or key) of an account: check that no other
+ * account has the new value, write it only if the old value is still there,
+ * re-check after the index catches up, and put the old value back on a clash.
+ */
+const changeUniqueField = async (params: {
+  current: PartnerAccount;
+  newValue: string;
+  holders: (value: string) => Promise<PartnerAccount[]>;
+  write: (from: string, to: string, keepHistory: boolean) => Promise<void>;
+  oldValue: string;
+  taken: PartnerFailure;
+}): Promise<PartnerFailure | undefined> => {
+  const { current, newValue } = params;
+  const takenByOther = async (): Promise<boolean> =>
+    (await params.holders(newValue)).some((item) => item.partnerId !== current.partnerId);
+
+  if (await takenByOther()) {
+    return params.taken;
+  }
+
+  try {
+    await params.write(params.oldValue, newValue, true);
+  } catch (error) {
+    if (isConditionFailure(error)) {
+      return fail('CONFLICT', 'the partner was changed meanwhile; reload and try again');
+    }
+
+    throw error;
+  }
+
+  await sleep(recheckDelayMs());
+
+  if (await takenByOther()) {
+    await params
+      .write(newValue, params.oldValue, false)
+      .catch((error) => console.error('[partner] could not revert change', current.partnerId, error));
+
+    return params.taken;
+  }
+
+  return undefined;
+};
+
+/**
+ * Finance changes a partner's login email, key and/or display name. The
+ * partnerId, past orders, wallet and history stay as they are. A new key
+ * credits sales from now on; the old one goes to previousKeys and stops
+ * crediting new sales.
  */
 export const updatePartner = async (params: {
   partnerId: string;
   email?: unknown;
+  key?: unknown;
   name?: unknown;
 }): Promise<PartnerDetailResult> => {
   const loaded = await getPartnerDetail(params.partnerId);
@@ -392,7 +386,7 @@ export const updatePartner = async (params: {
   }
 
   const current = loaded.partner;
-  const now = new Date().toISOString();
+  const now = (): string => new Date().toISOString();
 
   if (params.name !== undefined) {
     const name = str(params.name);
@@ -401,7 +395,7 @@ export const updatePartner = async (params: {
       return fail('INVALID_NAME', `name must be 1-${MAX_PARTNER_NAME_LENGTH} characters`);
     }
 
-    await updatePartnerAccountName({ partnerId: current.partnerId, name, now });
+    await updatePartnerAccountName({ partnerId: current.partnerId, name, now: now() });
   }
 
   if (params.email !== undefined) {
@@ -412,72 +406,44 @@ export const updatePartner = async (params: {
     }
 
     if (email !== current.email) {
-      const takenBy = async (): Promise<boolean> =>
-        (await accountsWithEmail(email)).some((item) => item.partnerId !== current.partnerId);
+      const failed = await changeUniqueField({
+        current,
+        newValue: email,
+        oldValue: current.email,
+        holders: accountsWithEmail,
+        write: (from, to) => setPartnerAccountEmail({ partnerId: current.partnerId, oldEmail: from, newEmail: to, now: now() }),
+        taken: fail('EMAIL_TAKEN', 'another partner already logs in with this email'),
+      });
 
-      // Check before changing...
-      if (await takenBy()) {
-        return fail('EMAIL_TAKEN', 'another partner already logs in with this email');
+      if (failed) {
+        return failed;
       }
+    }
+  }
 
-      try {
-        await setPartnerAccountEmail({ partnerId: current.partnerId, oldEmail: current.email, newEmail: email, now });
-      } catch (error) {
-        if (isConditionFailure(error)) {
-          return fail('CONFLICT', 'the partner was changed meanwhile; reload and try again');
-        }
+  if (params.key !== undefined) {
+    const key = normalizePartnerKey(params.key);
 
-        throw error;
-      }
+    if (!PARTNER_KEY_PATTERN.test(key)) {
+      return fail('INVALID_KEY', 'key must be 3-40 lowercase letters, digits or hyphens');
+    }
 
-      // ...and re-check after: if another account took the email meanwhile,
-      // put this partner's old email back.
-      await sleep(recheckDelayMs());
+    if (key !== current.key) {
+      const failed = await changeUniqueField({
+        current,
+        newValue: key,
+        oldValue: current.key,
+        holders: accountsWithKey,
+        write: (from, to, keepHistory) =>
+          setPartnerAccountKey({ partnerId: current.partnerId, oldKey: from, newKey: to, now: now(), keepHistory }),
+        taken: fail('KEY_TAKEN', 'this key is already used'),
+      });
 
-      if (await takenBy()) {
-        await setPartnerAccountEmail({
-          partnerId: current.partnerId,
-          oldEmail: email,
-          newEmail: current.email,
-          now: new Date().toISOString(),
-        }).catch((error) => console.error('[partner] could not revert email change', current.partnerId, error));
-
-        return fail('EMAIL_TAKEN', 'another partner already logs in with this email');
+      if (failed) {
+        return failed;
       }
     }
   }
 
   return getPartnerDetail(current.partnerId);
-};
-
-/** Finance gives an existing partner another key (e.g. a new campaign link). */
-export const addKeyToPartner = async (params: { partnerId: string; key: unknown }): Promise<PartnerDetailResult> => {
-  const key = normalizePartnerKey(params.key);
-
-  if (!PARTNER_KEY_PATTERN.test(key)) {
-    return fail('INVALID_KEY', 'key must be 3-40 lowercase letters, digits or hyphens');
-  }
-
-  const loaded = await getPartnerDetail(params.partnerId);
-
-  if (!loaded.success) {
-    return loaded;
-  }
-
-  try {
-    await putPartnerKey({
-      key,
-      partnerId: loaded.partner.partnerId,
-      email: loaded.partner.email,
-      createdAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    if (isConditionFailure(error)) {
-      return fail('KEY_TAKEN', 'this key is already used');
-    }
-
-    throw error;
-  }
-
-  return getPartnerDetail(loaded.partner.partnerId);
 };
