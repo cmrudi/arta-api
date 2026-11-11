@@ -94,9 +94,16 @@ const primaryKeyOf = (keys: PartnerKeyView[]): string | undefined => keys[keys.l
 // ---------------------------------------------------------------------------
 // Lookups
 
-/** Every account with this email, oldest first. Normally zero or one. */
+/**
+ * Every account with this email, oldest first. Normally zero or one. Only real
+ * PTN-... accounts count: any other row in the table that carries an email
+ * (such as the EMAIL# rows an earlier version wrote) is ignored.
+ */
 const accountsWithEmail = async (email: string): Promise<PartnerAccount[]> =>
-  (await queryPartnerAccountsByEmail(email)).map(toAccount).sort(byAge);
+  (await queryPartnerAccountsByEmail(email))
+    .map(toAccount)
+    .filter((account) => isPartnerId(account.partnerId))
+    .sort(byAge);
 
 export const findPartnerByEmail = async (rawEmail: string): Promise<PartnerAccount | undefined> => {
   const email = normalizePartnerEmail(rawEmail);
