@@ -20,8 +20,8 @@ import { PARTNER_PAYOUT_ROLE } from '../../models/partnerPayout';
 
 const partnerPayoutRouter = Router();
 
-// Partner portal: the logged-in partner's own token. The wallet is looked up by
-// the email on that token, never by anything the client sends.
+// Partner portal: the logged-in partner's own token. The wallet is found through
+// the email on that token (email -> partnerId), never from anything the client sends.
 partnerPayoutRouter.get('/partner/wallet', requireAuth0EndUser, getMyPartnerWallet);
 partnerPayoutRouter.post('/partner/withdrawals', requireAuth0EndUser, postMyPartnerWithdrawal);
 partnerPayoutRouter.post(
@@ -34,7 +34,7 @@ partnerPayoutRouter.post(
 const requireFinance = [requireAuth0Bearer, requireAuth0Role(PARTNER_PAYOUT_ROLE)];
 
 partnerPayoutRouter.get('/admin/partner-wallets', requireFinance, getAdminPartnerWallets);
-partnerPayoutRouter.get('/admin/partner-wallets/:email', requireFinance, getAdminPartnerWallet);
+partnerPayoutRouter.get('/admin/partner-wallets/:partnerId', requireFinance, getAdminPartnerWallet);
 partnerPayoutRouter.post('/admin/partner-wallets/adjustments', requireFinance, postAdminPartnerAdjustment);
 partnerPayoutRouter.get('/admin/partner-withdrawals', requireFinance, getAdminPartnerWithdrawals);
 partnerPayoutRouter.get('/admin/partner-withdrawals/:withdrawalId', requireFinance, getAdminPartnerWithdrawal);

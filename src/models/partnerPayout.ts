@@ -5,12 +5,15 @@
  *
  * Three tables:
  *
- *   PartnerWallet      PK email. One row per partner, keyed by the Auth0 email
- *                      the partner portal logs in with.
- *   PartnerLedger      PK entryId, GSI email-createdAt-index. Every change to a
- *                      wallet's available balance, newest first per partner.
+ *   PartnerWallet      PK partnerId. One row per partner (see models/partner.ts);
+ *                      the partner portal finds it through the login email.
+ *   PartnerLedger      PK entryId, GSI partnerId-createdAt-index. Every change
+ *                      to a wallet's available balance, newest first per partner.
  *   PartnerWithdrawal  PK withdrawalId, GSIs status-createdAt-index (finance
- *                      queue) and email-createdAt-index (partner history).
+ *                      queue) and partnerId-createdAt-index (partner history).
+ *
+ * Each row also keeps the partner's email at the time it was written, for
+ * notifications and for finance to read; the partnerId is what links them.
  *
  * Money only ever moves through a TransactWrite that updates the wallet, writes
  * the ledger entry and (for withdrawals) the withdrawal row together, so the
@@ -24,6 +27,8 @@ export type PartnerBankAccount = {
 };
 
 export type PartnerWallet = {
+  partnerId: string;
+  /** The partner's login email when the wallet last changed. */
   email: string;
   /** The affiliate key (go.artamobile.id/<key>), for finance's reference only. */
   partnerKey?: string;
@@ -54,6 +59,7 @@ export type PartnerLedgerType = (typeof PARTNER_LEDGER_TYPES)[number];
 
 export type PartnerLedgerEntry = {
   entryId: string;
+  partnerId: string;
   email: string;
   type: PartnerLedgerType;
   /** Signed: positive adds to the available balance, negative takes from it. */
@@ -87,6 +93,7 @@ export type WithdrawalEvent = {
 
 export type PartnerWithdrawal = {
   withdrawalId: string;
+  partnerId: string;
   email: string;
   partnerKey?: string;
   partnerName?: string;

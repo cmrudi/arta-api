@@ -25,6 +25,7 @@ import {
 } from '../../services/partnerPayoutService';
 
 const STATUS_BY_REASON: Record<string, number> = {
+  PARTNER_NOT_FOUND: 404,
   WALLET_NOT_FOUND: 404,
   WITHDRAWAL_NOT_FOUND: 404,
   NOT_OWNER: 403,
@@ -65,7 +66,8 @@ const toPartnerView = (result: WithdrawalResult): WithdrawalResult =>
   result.success ? { success: true, withdrawal: toPartnerWithdrawalView(result.withdrawal) } : result;
 
 // ---------------------------------------------------------------------------
-// Partner routes (the partner portal's own token; identity is its email)
+// Partner routes (the partner portal's own token; its email leads to the
+// partner account, and the wallet belongs to that account's partnerId)
 
 export const getMyPartnerWallet = async (
   _req: Request,
@@ -74,7 +76,7 @@ export const getMyPartnerWallet = async (
   try {
     const summary = await getPartnerPayoutSummary(emailOf(res));
 
-    return res.status(200).json({ success: true, ...summary });
+    return summary.success ? res.status(200).json(summary) : fail(res, summary);
   } catch (error) {
     return serverError(res, 'failed to read partner wallet', error);
   }
@@ -126,7 +128,7 @@ export const getAdminPartnerWallets = async (_req: Request, res: Response): Prom
 
 export const getAdminPartnerWallet = async (req: Request, res: Response): Promise<Response> => {
   try {
-    const result = await getPartnerWalletDetail(param(req, 'email'));
+    const result = await getPartnerWalletDetail(param(req, 'partnerId'));
 
     return result.success ? res.status(200).json(result) : fail(res, result);
   } catch (error) {
@@ -142,6 +144,7 @@ export const postAdminPartnerAdjustment = async (
 
   try {
     const result = await adjustPartnerBalance({
+      partnerId: input.partnerId,
       email: input.email,
       type: input.type,
       amount: input.amount,

@@ -38,10 +38,14 @@ const REFUND_TABLE_NAME = 'Refund';
 const REFUND_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
 const PARTNER_WALLET_TABLE_NAME = 'PartnerWallet';
 const PARTNER_LEDGER_TABLE_NAME = 'PartnerLedger';
-const PARTNER_LEDGER_EMAIL_CREATED_AT_INDEX = 'email-createdAt-index';
+const PARTNER_LEDGER_PARTNER_CREATED_AT_INDEX = 'partnerId-createdAt-index';
 const PARTNER_WITHDRAWAL_TABLE_NAME = 'PartnerWithdrawal';
 const PARTNER_WITHDRAWAL_STATUS_CREATED_AT_INDEX = 'status-createdAt-index';
-const PARTNER_WITHDRAWAL_EMAIL_CREATED_AT_INDEX = 'email-createdAt-index';
+const PARTNER_WITHDRAWAL_PARTNER_CREATED_AT_INDEX = 'partnerId-createdAt-index';
+const PARTNER_ACCOUNT_TABLE_NAME = 'PartnerAccount';
+const PARTNER_KEY_TABLE_NAME = 'Partner';
+const PARTNER_KEY_PARTNER_ID_INDEX = 'partnerId-index';
+const ORDER_PARTNER_CREATED_AT_INDEX = 'partner-createdAt-index';
 
 export const scanPartnerOrdersByDateRange = async (
   startDate: string,
@@ -695,12 +699,12 @@ export const transitionRefund = async (params: {
 // and (for withdrawals) the withdrawal row.
 
 export const getPartnerWallet = async (
-  email: string,
+  partnerId: string,
 ): Promise<{ Item?: Record<string, unknown> }> =>
   sendDynamoCommand(
     new GetCommand({
       TableName: PARTNER_WALLET_TABLE_NAME,
-      Key: { email },
+      Key: { partnerId },
     }),
   );
 
@@ -727,17 +731,17 @@ export const scanPartnerWallets = async (): Promise<Record<string, unknown>[]> =
 };
 
 // Newest first, capped: the portal and the admin sheet show recent history.
-export const queryPartnerLedgerByEmail = async (
-  email: string,
+export const queryPartnerLedgerByPartnerId = async (
+  partnerId: string,
   limit: number,
 ): Promise<Record<string, unknown>[]> => {
   const page = await sendDynamoCommand<{ Items?: Record<string, unknown>[] }>(
     new QueryCommand({
       TableName: PARTNER_LEDGER_TABLE_NAME,
-      IndexName: PARTNER_LEDGER_EMAIL_CREATED_AT_INDEX,
-      KeyConditionExpression: '#email = :email',
-      ExpressionAttributeNames: { '#email': 'email' },
-      ExpressionAttributeValues: { ':email': email },
+      IndexName: PARTNER_LEDGER_PARTNER_CREATED_AT_INDEX,
+      KeyConditionExpression: '#partnerId = :partnerId',
+      ExpressionAttributeNames: { '#partnerId': 'partnerId' },
+      ExpressionAttributeValues: { ':partnerId': partnerId },
       ScanIndexForward: false,
       Limit: limit,
     }),
@@ -759,6 +763,7 @@ export const adjustPartnerWallet = async (params: {
 }): Promise<void> => {
   const { entry } = params;
   const names: Record<string, string> = {
+    '#email': 'email',
     '#balance': 'balance',
     '#onHold': 'onHold',
     '#totalCredited': 'totalCredited',
@@ -767,11 +772,14 @@ export const adjustPartnerWallet = async (params: {
     '#updatedAt': 'updatedAt',
   };
   const values: Record<string, unknown> = {
+    ':email': entry.email,
     ':amt': entry.amount,
     ':zero': 0,
     ':now': entry.createdAt,
   };
   const assignments = [
+    // The wallet keeps a copy of the partner's current email for finance.
+    '#email = :email',
     '#balance = if_not_exists(#balance, :zero) + :amt',
     '#totalCredited = if_not_exists(#totalCredited, :zero) + :amt',
     '#onHold = if_not_exists(#onHold, :zero)',
@@ -812,7 +820,7 @@ export const adjustPartnerWallet = async (params: {
         {
           Update: {
             TableName: PARTNER_WALLET_TABLE_NAME,
-            Key: { email: entry.email },
+            Key: { partnerId: entry.partnerId },
             UpdateExpression: `SET ${assignments.join(', ')}`,
             ...(condition ? { ConditionExpression: condition } : {}),
             ExpressionAttributeNames: names,
@@ -841,7 +849,7 @@ export const createPartnerWithdrawal = async (params: {
         {
           Update: {
             TableName: PARTNER_WALLET_TABLE_NAME,
-            Key: { email: withdrawal.email },
+            Key: { partnerId: withdrawal.partnerId },
             UpdateExpression:
               'SET #balance = #balance - :amt, #onHold = if_not_exists(#onHold, :zero) + :amt, ' +
               '#openWithdrawalId = :id, #bankAccount = :bank, #updatedAt = :now',
@@ -923,17 +931,17 @@ export const queryPartnerWithdrawalsByStatus = async (
 };
 
 // Newest first, capped, for the partner's own history.
-export const queryPartnerWithdrawalsByEmail = async (
-  email: string,
+export const queryPartnerWithdrawalsByPartnerId = async (
+  partnerId: string,
   limit: number,
 ): Promise<Record<string, unknown>[]> => {
   const page = await sendDynamoCommand<{ Items?: Record<string, unknown>[] }>(
     new QueryCommand({
       TableName: PARTNER_WITHDRAWAL_TABLE_NAME,
-      IndexName: PARTNER_WITHDRAWAL_EMAIL_CREATED_AT_INDEX,
-      KeyConditionExpression: '#email = :email',
-      ExpressionAttributeNames: { '#email': 'email' },
-      ExpressionAttributeValues: { ':email': email },
+      IndexName: PARTNER_WITHDRAWAL_PARTNER_CREATED_AT_INDEX,
+      KeyConditionExpression: '#partnerId = :partnerId',
+      ExpressionAttributeNames: { '#partnerId': 'partnerId' },
+      ExpressionAttributeValues: { ':partnerId': partnerId },
       ScanIndexForward: false,
       Limit: limit,
     }),
@@ -956,7 +964,7 @@ export const queryPartnerWithdrawalsByEmail = async (
  * the wallet tied to this exact withdrawal.
  */
 export const transitionPartnerWithdrawal = async (params: {
-  withdrawal: { withdrawalId: string; email: string; amount: number };
+  withdrawal: { withdrawalId: string; partnerId: string; amount: number };
   from: readonly WithdrawalStatus[];
   to: WithdrawalStatus;
   event: WithdrawalEvent;
@@ -1011,7 +1019,7 @@ export const transitionPartnerWithdrawal = async (params: {
     transactItems.push({
       Update: {
         TableName: PARTNER_WALLET_TABLE_NAME,
-        Key: { email: withdrawal.email },
+        Key: { partnerId: withdrawal.partnerId },
         UpdateExpression: releases
           ? 'SET #onHold = #onHold - :amt, #balance = #balance + :amt, #updatedAt = :now REMOVE #openWithdrawalId'
           : 'SET #onHold = #onHold - :amt, #totalPaidOut = if_not_exists(#totalPaidOut, :zero) + :amt, #updatedAt = :now REMOVE #openWithdrawalId',
@@ -1043,4 +1051,273 @@ export const transitionPartnerWithdrawal = async (params: {
   }
 
   await sendDynamoCommand(new TransactWriteCommand({ TransactItems: transactItems as never }));
+};
+
+// ---------------------------------------------------------------------------
+// Partner accounts and affiliate keys. See models/partner.ts for the layout.
+
+export const getPartnerAccount = async (
+  partnerId: string,
+): Promise<{ Item?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new GetCommand({
+      TableName: PARTNER_ACCOUNT_TABLE_NAME,
+      Key: { partnerId },
+    }),
+  );
+
+/** The EMAIL#<email> guard row names the account that owns the login email. */
+export const getPartnerEmailGuard = async (
+  guardId: string,
+): Promise<{ Item?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new GetCommand({
+      TableName: PARTNER_ACCOUNT_TABLE_NAME,
+      Key: { partnerId: guardId },
+    }),
+  );
+
+export const scanPartnerAccounts = async (prefix: string): Promise<Record<string, unknown>[]> => {
+  const items: Record<string, unknown>[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+
+  do {
+    const page = await sendDynamoCommand<{
+      Items?: Record<string, unknown>[];
+      LastEvaluatedKey?: Record<string, unknown>;
+    }>(
+      new ScanCommand({
+        TableName: PARTNER_ACCOUNT_TABLE_NAME,
+        FilterExpression: 'begins_with(#partnerId, :prefix)',
+        ExpressionAttributeNames: { '#partnerId': 'partnerId' },
+        ExpressionAttributeValues: { ':prefix': prefix },
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+
+    items.push(...(page.Items || []));
+    exclusiveStartKey = page.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  return items;
+};
+
+/**
+ * A new partner: the account, its email guard and its first key, all or
+ * nothing. Fails the condition when the email already has an account, the key
+ * is taken, or (vanishingly unlikely) the random partnerId already exists.
+ */
+export const createPartnerAccountWithKey = async (params: {
+  account: { partnerId: string; email: string; name?: string; createdAt: string; updatedAt: string };
+  guardId: string;
+  key: { key: string; partnerId: string; email: string; createdAt: string };
+}): Promise<void> => {
+  const { account, guardId, key } = params;
+
+  await sendDynamoCommand(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Put: {
+            TableName: PARTNER_ACCOUNT_TABLE_NAME,
+            Item: { partnerId: guardId, ownerPartnerId: account.partnerId, email: account.email, createdAt: account.createdAt },
+            ConditionExpression: 'attribute_not_exists(partnerId)',
+          },
+        },
+        {
+          Put: {
+            TableName: PARTNER_ACCOUNT_TABLE_NAME,
+            Item: account,
+            ConditionExpression: 'attribute_not_exists(partnerId)',
+          },
+        },
+        {
+          Put: {
+            TableName: PARTNER_KEY_TABLE_NAME,
+            Item: key,
+            ConditionExpression: 'attribute_not_exists(#key)',
+            ExpressionAttributeNames: { '#key': 'key' },
+          },
+        },
+      ],
+    }),
+  );
+};
+
+/** Another key for an existing partner. Fails the condition when it is taken. */
+export const putPartnerKey = async (key: {
+  key: string;
+  partnerId: string;
+  email: string;
+  createdAt: string;
+}): Promise<void> => {
+  await sendDynamoCommand(
+    new PutCommand({
+      TableName: PARTNER_KEY_TABLE_NAME,
+      Item: key,
+      ConditionExpression: 'attribute_not_exists(#key)',
+      ExpressionAttributeNames: { '#key': 'key' },
+    }),
+  );
+};
+
+export const getPartnerKey = async (key: string): Promise<{ Item?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new GetCommand({
+      TableName: PARTNER_KEY_TABLE_NAME,
+      Key: { key },
+    }),
+  );
+
+export const queryPartnerKeysByPartnerId = async (partnerId: string): Promise<Record<string, unknown>[]> => {
+  const items: Record<string, unknown>[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+
+  do {
+    const page = await sendDynamoCommand<{
+      Items?: Record<string, unknown>[];
+      LastEvaluatedKey?: Record<string, unknown>;
+    }>(
+      new QueryCommand({
+        TableName: PARTNER_KEY_TABLE_NAME,
+        IndexName: PARTNER_KEY_PARTNER_ID_INDEX,
+        KeyConditionExpression: '#partnerId = :partnerId',
+        ExpressionAttributeNames: { '#partnerId': 'partnerId' },
+        ExpressionAttributeValues: { ':partnerId': partnerId },
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+
+    items.push(...(page.Items || []));
+    exclusiveStartKey = page.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  return items;
+};
+
+/**
+ * Move a partner to a new login email: drop the old guard (only if it is still
+ * theirs), claim the new one (only if free) and update the account (only if the
+ * email is still the one we read).
+ */
+export const changePartnerAccountEmail = async (params: {
+  partnerId: string;
+  oldEmail: string;
+  newEmail: string;
+  oldGuardId: string;
+  newGuardId: string;
+  now: string;
+}): Promise<void> => {
+  await sendDynamoCommand(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Put: {
+            TableName: PARTNER_ACCOUNT_TABLE_NAME,
+            Item: {
+              partnerId: params.newGuardId,
+              ownerPartnerId: params.partnerId,
+              email: params.newEmail,
+              createdAt: params.now,
+            },
+            ConditionExpression: 'attribute_not_exists(partnerId)',
+          },
+        },
+        {
+          Update: {
+            TableName: PARTNER_ACCOUNT_TABLE_NAME,
+            Key: { partnerId: params.partnerId },
+            UpdateExpression: 'SET #email = :new, #updatedAt = :now',
+            ConditionExpression: '#email = :old',
+            ExpressionAttributeNames: { '#email': 'email', '#updatedAt': 'updatedAt' },
+            ExpressionAttributeValues: { ':new': params.newEmail, ':old': params.oldEmail, ':now': params.now },
+          },
+        },
+        {
+          Delete: {
+            TableName: PARTNER_ACCOUNT_TABLE_NAME,
+            Key: { partnerId: params.oldGuardId },
+            ConditionExpression: '#owner = :partnerId',
+            ExpressionAttributeNames: { '#owner': 'ownerPartnerId' },
+            ExpressionAttributeValues: { ':partnerId': params.partnerId },
+          },
+        },
+      ],
+    }),
+  );
+};
+
+export const updatePartnerAccountName = async (params: {
+  partnerId: string;
+  name: string;
+  now: string;
+}): Promise<void> => {
+  await sendDynamoCommand(
+    new UpdateCommand({
+      TableName: PARTNER_ACCOUNT_TABLE_NAME,
+      Key: { partnerId: params.partnerId },
+      UpdateExpression: 'SET #name = :name, #updatedAt = :now',
+      ConditionExpression: 'attribute_exists(partnerId)',
+      ExpressionAttributeNames: { '#name': 'name', '#updatedAt': 'updatedAt' },
+      ExpressionAttributeValues: { ':name': params.name, ':now': params.now },
+    }),
+  );
+};
+
+/**
+ * Paid eSIM orders that came through one affiliate key, newest first. Same
+ * filter as the old AffiliateGetOrders Lambda, but paged to the end (capped)
+ * instead of stopping after the first 500 rows read.
+ */
+export const queryPublishedEsimOrdersByPartnerKey = async (
+  key: string,
+  cap: number,
+): Promise<Record<string, unknown>[]> => {
+  const items: Record<string, unknown>[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+
+  do {
+    const page = await sendDynamoCommand<{
+      Items?: Record<string, unknown>[];
+      LastEvaluatedKey?: Record<string, unknown>;
+    }>(
+      new QueryCommand({
+        TableName: ORDERS_TABLE_NAME,
+        IndexName: ORDER_PARTNER_CREATED_AT_INDEX,
+        KeyConditionExpression: '#partner = :key',
+        FilterExpression: '#status = :published AND #orderType = :esim',
+        ExpressionAttributeNames: { '#partner': 'partner', '#status': 'status', '#orderType': 'orderType' },
+        ExpressionAttributeValues: { ':key': key, ':published': 'ESIM_PUBLISHED', ':esim': 'esim' },
+        ScanIndexForward: false,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+
+    items.push(...(page.Items || []));
+    exclusiveStartKey = page.LastEvaluatedKey;
+  } while (exclusiveStartKey && items.length < cap);
+
+  return items.slice(0, cap);
+};
+
+export const scanPartnerKeys = async (): Promise<Record<string, unknown>[]> => {
+  const items: Record<string, unknown>[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+
+  do {
+    const page = await sendDynamoCommand<{
+      Items?: Record<string, unknown>[];
+      LastEvaluatedKey?: Record<string, unknown>;
+    }>(
+      new ScanCommand({
+        TableName: PARTNER_KEY_TABLE_NAME,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+
+    items.push(...(page.Items || []));
+    exclusiveStartKey = page.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  return items;
 };
