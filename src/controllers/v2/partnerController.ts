@@ -3,14 +3,12 @@ import { Request, Response } from 'express';
 import { AuthenticatedLocals, getAuth0Email } from '../../middlewares/auth0BearerAuth';
 import {
   PartnerFailure,
-  addKeyToPartner,
   findPartnerByEmail,
   getPartnerDetail,
   getPartnerOrders,
-  listKeysOfPartner,
   listPartners,
   partnerKeyExists,
-  registerPartnerKey,
+  registerPartner,
   updatePartner,
 } from '../../services/partnerService';
 
@@ -18,6 +16,7 @@ const STATUS_BY_REASON: Record<string, number> = {
   PARTNER_NOT_FOUND: 404,
   KEY_TAKEN: 409,
   EMAIL_TAKEN: 409,
+  ALREADY_REGISTERED: 409,
   CONFLICT: 409,
 };
 
@@ -58,7 +57,7 @@ export const postRegisterPartner = async (
   res: Response<unknown, AuthenticatedLocals>,
 ): Promise<Response> => {
   try {
-    const result = await registerPartnerKey({ email: emailOf(res), key: body(req).key });
+    const result = await registerPartner({ email: emailOf(res), key: body(req).key });
 
     return result.success ? res.status(201).json(result) : fail(res, result);
   } catch (error) {
@@ -77,9 +76,7 @@ export const getMyPartner = async (
       return res.status(404).json({ success: false, reason: 'PARTNER_NOT_FOUND', message: 'Partner not found' });
     }
 
-    return res
-      .status(200)
-      .json({ success: true, partner: { ...account, keys: await listKeysOfPartner(account.partnerId) } });
+    return res.status(200).json({ success: true, partner: account });
   } catch (error) {
     return serverError(res, 'failed to read partner', error);
   }
@@ -125,20 +122,15 @@ export const patchAdminPartner = async (req: Request, res: Response): Promise<Re
   const input = body(req);
 
   try {
-    const result = await updatePartner({ partnerId: param(req, 'partnerId'), email: input.email, name: input.name });
+    const result = await updatePartner({
+      partnerId: param(req, 'partnerId'),
+      email: input.email,
+      key: input.key,
+      name: input.name,
+    });
 
     return result.success ? res.status(200).json(result) : fail(res, result);
   } catch (error) {
     return serverError(res, 'failed to update partner', error);
-  }
-};
-
-export const postAdminPartnerKey = async (req: Request, res: Response): Promise<Response> => {
-  try {
-    const result = await addKeyToPartner({ partnerId: param(req, 'partnerId'), key: body(req).key });
-
-    return result.success ? res.status(201).json(result) : fail(res, result);
-  } catch (error) {
-    return serverError(res, 'failed to add partner key', error);
   }
 };

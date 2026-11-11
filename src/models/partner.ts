@@ -4,37 +4,34 @@ import { randomBytes } from 'crypto';
  * Affiliate partners.
  *
  * A partner is one person or business, identified by a `partnerId` that never
- * changes. Their login email and their affiliate keys (go.artamobile.id/<key>)
- * may change over time; the partnerId ties them together.
+ * changes. Everything about them is one row in PartnerAccount:
  *
- *   PartnerAccount  PK partnerId ("PTN-XXXXXXXX"): email, name, timestamps.
- *                   GSI email-index finds the account for a login email.
- *                   DynamoDB cannot make an indexed value unique, so one
- *                   account per email is kept by checking before creating and
- *                   re-checking after (see partnerService); if two accounts
- *                   ever share an email, the oldest one wins.
- *   Partner         PK key (the affiliate key). One row per key, with the
- *                   owner's partnerId (GSI partnerId-index) and, for the old
- *                   Lambdas that still read it, the email at creation time.
- *                   A key is never deleted or given to someone else, so old
- *                   links and old orders keep pointing at the right partner.
+ *   PartnerAccount  PK partnerId ("PTN-XXXXXXXX")
+ *                   email         login email          GSI email-index
+ *                   key           affiliate key        GSI key-index
+ *                                 (go.artamobile.id/<key>), one per partner
+ *                   previousKeys  keys they used before (history only)
+ *                   name, createdAt, updatedAt
  *
- * Orders store the key as `partner` (and, from now on, `partnerId`).
+ * DynamoDB cannot make an indexed value unique, so one account per email and
+ * per key is kept by checking the index before writing and re-checking about a
+ * second later (see partnerService); if two accounts ever share an email or a
+ * key, the oldest one wins.
+ *
+ * Orders store the key they came through (`partner`) and the owner's
+ * `partnerId` (GSI partnerId-createdAt-index). A partner's sales are listed by
+ * partnerId, so they stay credited after the key or email changes. A key the
+ * partner no longer uses stops crediting new sales.
  */
 
 export type PartnerAccount = {
   partnerId: string;
   email: string;
+  key: string;
+  previousKeys?: string[];
   name?: string;
   createdAt: string;
   updatedAt: string;
-};
-
-export type PartnerKey = {
-  key: string;
-  partnerId?: string;
-  email?: string;
-  createdAt?: string;
 };
 
 export const PARTNER_ID_PREFIX = 'PTN-';

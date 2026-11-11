@@ -124,41 +124,38 @@ Rules:
 ### Partners (v2)
 
 A partner is identified by a `partnerId` (`PTN-` + 8 characters, e.g.
-`PTN-7K2M9QXA`) that never changes. Their login email and their affiliate keys
-(`go.artamobile.id/<key>`) can change; the partnerId ties them, their orders and
-their wallet together. Orders keep the key they came through (`Order.partner`).
+`PTN-7K2M9QXA`) that never changes. Everything about them is one row in
+`PartnerAccount`: login `email`, affiliate `key` (`go.artamobile.id/<key>`, one
+per partner), `previousKeys` (history), `name`. Orders store the key they came
+through (`Order.partner`) and the owner's `partnerId`; a partner's sales are
+listed by `partnerId`, so they stay credited after the key or email changes.
 
 Partner routes (the partner portal's Auth0 token; the account is the one for
 the token's email, never one named in the request):
 
 - `GET /v2/partner/keys/:key/exists` - public; `{ "exist": true | false }`
-- `POST /v2/partner/register` - `{ "key": "budi" }`. The first key creates the account; later keys join it. 409 `KEY_TAKEN`.
-- `GET /v2/partner/me` - account and all its keys
-- `GET /v2/partner/me/orders` - paid eSIM orders through any of the partner's keys, newest first (customer masked, commission as `price`). 404 `Partner not found` when the email has no account.
+- `POST /v2/partner/register` - `{ "key": "budi" }`. Creates the account. 409 `KEY_TAKEN`, or `ALREADY_REGISTERED` when the email already has an account.
+- `GET /v2/partner/me` - the account
+- `GET /v2/partner/me/orders` - the partner's paid eSIM orders, newest first (customer masked, commission as `price`). 404 `Partner not found` when the email has no account.
 
 Finance routes (arta-admin token with the `finance` role):
 
-- `GET /v2/admin/partners` - every partner with its keys
+- `GET /v2/admin/partners` - every partner
 - `GET /v2/admin/partners/:partnerId`
-- `PATCH /v2/admin/partners/:partnerId` - `{ "email": "new@example.com", "name": "Budi" }` (either or both). 409 `EMAIL_TAKEN` when another partner logs in with that email.
-- `POST /v2/admin/partners/:partnerId/keys` - `{ "key": "budi-promo" }`
+- `PATCH /v2/admin/partners/:partnerId` - `{ "email": "new@example.com", "key": "budi-baru", "name": "Budi" }` (any of them). A new key credits sales from then on; the old one moves to `previousKeys` and stops crediting new sales. 409 `EMAIL_TAKEN` / `KEY_TAKEN`.
 
 DynamoDB:
 
 | Table | Key | Global secondary indexes |
 |---|---|---|
-| `PartnerAccount` | `partnerId` (S) | `email-index`: `email` (S), projection ALL |
-| `Partner` (existing, one row per key) | `key` (S) | `partnerId-index`: `partnerId` (S), projection ALL |
+| `PartnerAccount` | `partnerId` (S) | `email-index`: `email` (S); `key-index`: `key` (S); projection ALL |
+| `Order` (existing) | `orderId` (S) | adds `partnerId-createdAt-index`: `partnerId` (S) + `createdAt` (S), projection ALL |
 
-DynamoDB cannot make an indexed value unique, so one account per login email is
-kept by checking the `email-index` before creating an account and re-checking
-about a second later (`PARTNER_RECHECK_DELAY_MS`, default 1000): if a parallel
-sign-up created a second account, the newer one moves its keys to the oldest
-and is deleted. Should a duplicate ever remain, login uses the oldest account
-and `GET /v2/admin/partners` marks both with `duplicateEmail: true`.
-
-Key rows keep `email` too, for the old `/v1/partner` Lambdas while they still
-run.
+DynamoDB cannot make an indexed value unique, so one account per email and per
+key is kept by checking the index before writing and re-checking about a second
+later (`PARTNER_RECHECK_DELAY_MS`, default 1000); a clashing account created in
+parallel deletes itself. Should a duplicate ever remain, the oldest account wins
+and `GET /v2/admin/partners` flags it (`duplicateEmail` / `duplicateKey`).
 
 ### Partner Payouts (v2)
 
@@ -203,8 +200,8 @@ Every row also stores the partner's email at the time, for emails and for
 finance to read; the partnerId is what links them.
 
 The Lambda role needs `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `Query`,
-`Scan` and `TransactWriteItems` on these tables, `PartnerAccount` and `Partner`,
-and their indexes, plus `Query` on `Order/index/partner-createdAt-index`.
+`Scan` and `TransactWriteItems` on these tables, `PartnerAccount` and their
+indexes, plus `Query` on `Order/index/partnerId-createdAt-index`.
 
 Environment:
 
