@@ -2,12 +2,20 @@ import { randomUUID } from 'crypto';
 
 import {
   countCompletedRedemptionsByPromoCode,
+  createPromoCode,
   findProductByProductCode,
   getPromoCodeByCode,
   putPromoCodeRedemption,
+  scanAllPromoCodes,
+  setPromoCodeActive,
 } from '../lib/dynamoDb';
 import { ProductMappingItem } from '../models/productMapping';
-import { PromoCodeItem } from '../models/promoCode';
+import {
+  ADMIN_MAX_DISCOUNT_AMOUNT,
+  ADMIN_MAX_DISCOUNT_PERCENTAGE,
+  PromoCodeItem,
+  isPromoCodeActive,
+} from '../models/promoCode';
 import { PromoCodeRedemptionItem } from '../models/promoCodeRedemption';
 
 type ValidatePromoSuccessResult = {
@@ -32,6 +40,7 @@ type ValidatePromoErrorResult = {
     | 'PRODUCT_PRICE_INVALID'
     | 'PROMO_NOT_FOUND'
     | 'PROMO_INVALID'
+    | 'PROMO_INACTIVE'
     | 'PROMO_USAGE_EXCEEDED';
 };
 
@@ -111,6 +120,13 @@ export const validatePromoByProductCode = async (
     return {
       success: false,
       reason: 'PROMO_NOT_FOUND',
+    };
+  }
+
+  if (!isPromoCodeActive(promo)) {
+    return {
+      success: false,
+      reason: 'PROMO_INACTIVE',
     };
   }
 
@@ -207,4 +223,201 @@ export const validatePromoByProductCode = async (
     priceCut: redemption.priceCut,
     finalPrice: redemption.finalPrice,
   };
+};
+
+// ---------------------------------------------------------------------------
+// Admin management (arta-admin)
+
+/** What arta-admin sees of a promo code. Amounts are in rupiah. */
+export type AdminPromoCode = {
+  code: string;
+  discountPercentage: number;
+  maxDiscountAmount: number;
+  maxUsage: number | null;
+  usedCount: number;
+  isActive: boolean;
+  source: string | null;
+  createdAt: string | null;
+  createdBy: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
+
+type AdminPromoErrorReason =
+  | 'INVALID_CODE'
+  | 'INVALID_DISCOUNT_PERCENTAGE'
+  | 'INVALID_MAX_DISCOUNT_AMOUNT'
+  | 'INVALID_MAX_USAGE'
+  | 'ALREADY_EXISTS'
+  | 'PROMO_NOT_FOUND';
+
+export type AdminPromoResult =
+  | { success: true; promo: AdminPromoCode }
+  | { success: false; reason: AdminPromoErrorReason; message: string };
+
+// Letters, digits, dash and underscore; what a customer can reasonably type.
+const PROMO_CODE_PATTERN = /^[A-Z0-9_-]{3,32}$/;
+
+const optionalString = (value: unknown): string | null =>
+  typeof value === 'string' && value ? value : null;
+
+const toAdminPromo = (item: Record<string, unknown>, usedCount: number): AdminPromoCode => {
+  const maxPriceCut = normalizeNumber(item.maxPriceCut);
+
+  return {
+    code: String(item.code),
+    discountPercentage: normalizeNumber(item.discountPercentage),
+    // Stored in thousands of rupiah, like product prices.
+    maxDiscountAmount: Number.isFinite(maxPriceCut) ? Math.round(maxPriceCut * 1000) : NaN,
+    maxUsage: readOptionalNumber(item.maxUsage),
+    usedCount,
+    isActive: isPromoCodeActive(item),
+    source: optionalString(item.source),
+    createdAt: optionalString(item.createdAt),
+    createdBy: optionalString(item.createdBy),
+    updatedAt: optionalString(item.updatedAt),
+    updatedBy: optionalString(item.updatedBy),
+  };
+};
+
+const isConditionalCheckFailure = (error: unknown): boolean =>
+  error instanceof Error && error.name === 'ConditionalCheckFailedException';
+
+export const listAdminPromoCodes = async (): Promise<AdminPromoCode[]> => {
+  const items = await scanAllPromoCodes();
+  const promos = await Promise.all(
+    items.map(async (item) =>
+      toAdminPromo(item, await countCompletedRedemptionsByPromoCode(String(item.code))),
+    ),
+  );
+
+  // Newest first; hand-made codes without createdAt sink to the bottom by code.
+  return promos.sort(
+    (a, b) =>
+      (b.createdAt || '').localeCompare(a.createdAt || '') || a.code.localeCompare(b.code),
+  );
+};
+
+export type CreateAdminPromoInput = {
+  code: unknown;
+  discountPercentage: unknown;
+  maxDiscountAmount: unknown;
+  maxUsage?: unknown;
+};
+
+/**
+ * Creates a promo from arta-admin. The 30% / Rp10.000 ceilings are enforced
+ * here, not only in the admin form, so a hand-crafted request cannot exceed them.
+ */
+export const createAdminPromoCode = async (
+  input: CreateAdminPromoInput,
+  actor: string,
+): Promise<AdminPromoResult> => {
+  const code = typeof input.code === 'string' ? input.code.trim().toUpperCase() : '';
+
+  if (!PROMO_CODE_PATTERN.test(code)) {
+    return {
+      success: false,
+      reason: 'INVALID_CODE',
+      message: 'code must be 3-32 characters of letters, digits, "-" or "_"',
+    };
+  }
+
+  const discountPercentage = Number(input.discountPercentage);
+
+  if (
+    !Number.isFinite(discountPercentage) ||
+    discountPercentage <= 0 ||
+    discountPercentage > ADMIN_MAX_DISCOUNT_PERCENTAGE
+  ) {
+    return {
+      success: false,
+      reason: 'INVALID_DISCOUNT_PERCENTAGE',
+      message: `discountPercentage must be more than 0 and at most ${ADMIN_MAX_DISCOUNT_PERCENTAGE}`,
+    };
+  }
+
+  const maxDiscountAmount = Number(input.maxDiscountAmount);
+
+  if (
+    !Number.isInteger(maxDiscountAmount) ||
+    maxDiscountAmount <= 0 ||
+    maxDiscountAmount > ADMIN_MAX_DISCOUNT_AMOUNT
+  ) {
+    return {
+      success: false,
+      reason: 'INVALID_MAX_DISCOUNT_AMOUNT',
+      message: `maxDiscountAmount must be a whole rupiah amount from 1 to ${ADMIN_MAX_DISCOUNT_AMOUNT}`,
+    };
+  }
+
+  let maxUsage: number | undefined;
+
+  if (input.maxUsage !== undefined && input.maxUsage !== null && input.maxUsage !== '') {
+    maxUsage = Number(input.maxUsage);
+
+    if (!Number.isInteger(maxUsage) || maxUsage < 1) {
+      return {
+        success: false,
+        reason: 'INVALID_MAX_USAGE',
+        message: 'maxUsage must be a whole number of at least 1, or left empty for no limit',
+      };
+    }
+  }
+
+  const now = new Date().toISOString();
+  const promo: PromoCodeItem = {
+    code,
+    discountPercentage,
+    maxPriceCut: maxDiscountAmount / 1000,
+    ...(maxUsage !== undefined ? { maxUsage } : {}),
+    isActive: true,
+    source: 'ADMIN',
+    createdAt: now,
+    createdBy: actor,
+    updatedAt: now,
+    updatedBy: actor,
+  };
+
+  try {
+    await createPromoCode(promo);
+  } catch (error) {
+    if (isConditionalCheckFailure(error)) {
+      return {
+        success: false,
+        reason: 'ALREADY_EXISTS',
+        message: `promo code ${code} already exists`,
+      };
+    }
+
+    throw error;
+  }
+
+  return { success: true, promo: toAdminPromo(promo, 0) };
+};
+
+export const setAdminPromoCodeActive = async (
+  code: string,
+  isActive: boolean,
+  actor: string,
+): Promise<AdminPromoResult> => {
+  try {
+    const result = await setPromoCodeActive(code, isActive, actor);
+    const item = result.Attributes || { code, isActive };
+
+    return {
+      success: true,
+      promo: toAdminPromo(item, await countCompletedRedemptionsByPromoCode(code)),
+    };
+  } catch (error) {
+    if (isConditionalCheckFailure(error)) {
+      return {
+        success: false,
+        reason: 'PROMO_NOT_FOUND',
+        message: `promo code ${code} not found`,
+      };
+    }
+
+    throw error;
+  }
 };
