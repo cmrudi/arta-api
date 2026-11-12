@@ -9,8 +9,8 @@ import {
 } from '../../controllers/v2/promotionController';
 import { requireAuth0Bearer } from '../../middlewares/auth0BearerAuth';
 import { requireAuth0EndUser } from '../../middlewares/auth0EndUserAuth';
-import { requireAuth0Role } from '../../middlewares/auth0RoleAuth';
-import { PROMO_ADMIN_ROLE } from '../../models/promoCode';
+import { requireAnyAuth0Role } from '../../middlewares/auth0RoleAuth';
+import { PROMO_ADMIN_ROLES } from '../../models/promoCode';
 
 const promotionRouter = Router();
 
@@ -23,8 +23,8 @@ promotionRouter.get(
   validatePromotion,
 );
 
-// Admin: an arta-admin access token whose user has the promo admin role.
-const requirePromoAdmin = [requireAuth0Bearer, requireAuth0Role(PROMO_ADMIN_ROLE)];
+// Admin: an arta-admin access token whose user has a promo admin role.
+const requirePromoAdmin = [requireAuth0Bearer, requireAnyAuth0Role(PROMO_ADMIN_ROLES)];
 
 promotionRouter.get('/admin/promo-codes', requirePromoAdmin, getAdminPromoCodes);
 promotionRouter.post('/admin/promo-codes', requirePromoAdmin, postAdminPromoCode);

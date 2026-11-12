@@ -32,3 +32,23 @@ export const requireAuth0Role =
 
     next();
   };
+
+/** Like requireAuth0Role, but any one of the given roles is enough. */
+export const requireAnyAuth0Role =
+  (roles: readonly string[]) =>
+  (
+    _req: Request,
+    res: Response<unknown, AuthenticatedLocals>,
+    next: NextFunction,
+  ): void | Response => {
+    const held = getAuth0Roles(res.locals.auth);
+
+    if (!roles.some((role) => held.includes(role))) {
+      return res.status(403).json({
+        success: false,
+        message: `one of the roles ${roles.join(', ')} is required`,
+      });
+    }
+
+    next();
+  };

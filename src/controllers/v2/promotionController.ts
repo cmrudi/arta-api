@@ -113,7 +113,7 @@ export const validatePromotion = async (
 };
 
 // ---------------------------------------------------------------------------
-// Admin routes (arta-admin access token with the promo admin role)
+// Admin routes (arta-admin access token with a promo admin role)
 
 const ADMIN_STATUS_BY_REASON: Record<string, number> = {
   ALREADY_EXISTS: 409,

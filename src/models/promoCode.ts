@@ -21,8 +21,11 @@ export type PromoCodeItem = {
   updatedBy?: string;
 } & Record<string, unknown>;
 
-/** Auth0 role that may manage promo codes from arta-admin. */
-export const PROMO_ADMIN_ROLE = 'finance';
+/**
+ * Auth0 roles that may manage promo codes from arta-admin: finance, and for now
+ * customer service ("customer") too. Either one is enough.
+ */
+export const PROMO_ADMIN_ROLES = ['finance', 'customer'] as const;
 
 // Limits on codes created from arta-admin. Codes outside them can still be
 // written to the table by hand; the admin page just cannot make them.
