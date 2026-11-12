@@ -1,7 +1,15 @@
 import { Request, Response } from 'express';
 
 import { AuthenticatedLocals, getAuth0Email } from '../../middlewares/auth0BearerAuth';
-import { MAX_ORDER_QUANTITY, validatePromoByProductCode } from '../../services/promotionService';
+import {
+  AdminPromoResult,
+  MAX_ORDER_QUANTITY,
+  createAdminPromoCode,
+  listAdminPromoCodes,
+  setAdminPromoCodeActive,
+  validatePromoByProductCode,
+} from '../../services/promotionService';
+import { ADMIN_MAX_DISCOUNT_AMOUNT, ADMIN_MAX_DISCOUNT_PERCENTAGE } from '../../models/promoCode';
 
 export const validatePromotion = async (
   req: Request,
@@ -57,6 +65,14 @@ export const validatePromotion = async (
         });
       }
 
+      // Indistinguishable from an unknown code to the customer on purpose.
+      if (result.reason === 'PROMO_INACTIVE') {
+        return res.status(404).json({
+          success: false,
+          message: 'promoCode is not active',
+        });
+      }
+
       if (result.reason === 'PROMO_USAGE_EXCEEDED') {
         return res.status(409).json({
           success: false,
@@ -95,3 +111,91 @@ export const validatePromotion = async (
     });
   }
 };
+
+// ---------------------------------------------------------------------------
+// Admin routes (arta-admin access token with the promo admin role)
+
+const ADMIN_STATUS_BY_REASON: Record<string, number> = {
+  ALREADY_EXISTS: 409,
+  PROMO_NOT_FOUND: 404,
+};
+
+const actorOf = (res: Response<unknown, AuthenticatedLocals>): string => {
+  const auth = res.locals.auth;
+
+  return getAuth0Email(auth) || (typeof auth?.sub === 'string' ? auth.sub : 'unknown');
+};
+
+const sendAdminPromoResult = (res: Response, result: AdminPromoResult, okStatus = 200): Response =>
+  result.success
+    ? res.status(okStatus).json({ success: true, promo: result.promo })
+    : res.status(ADMIN_STATUS_BY_REASON[result.reason] || 400).json(result);
+
+const adminServerError = (res: Response, message: string, error: unknown): Response =>
+  res.status(500).json({
+    success: false,
+    message,
+    error: error instanceof Error ? error.message : 'unknown error',
+  });
+
+export const getAdminPromoCodes = async (
+  _req: Request,
+  res: Response<unknown, AuthenticatedLocals>,
+): Promise<Response> => {
+  try {
+    const promos = await listAdminPromoCodes();
+
+    return res.status(200).json({
+      success: true,
+      promos,
+      limits: {
+        maxDiscountPercentage: ADMIN_MAX_DISCOUNT_PERCENTAGE,
+        maxDiscountAmount: ADMIN_MAX_DISCOUNT_AMOUNT,
+      },
+    });
+  } catch (error) {
+    return adminServerError(res, 'failed to list promo codes', error);
+  }
+};
+
+export const postAdminPromoCode = async (
+  req: Request,
+  res: Response<unknown, AuthenticatedLocals>,
+): Promise<Response> => {
+  const body = (req.body || {}) as Record<string, unknown>;
+
+  try {
+    const result = await createAdminPromoCode(
+      {
+        code: body.code,
+        discountPercentage: body.discountPercentage,
+        maxDiscountAmount: body.maxDiscountAmount,
+        maxUsage: body.maxUsage,
+      },
+      actorOf(res),
+    );
+
+    return sendAdminPromoResult(res, result, 201);
+  } catch (error) {
+    return adminServerError(res, 'failed to create promo code', error);
+  }
+};
+
+const setActive =
+  (isActive: boolean) =>
+  async (req: Request, res: Response<unknown, AuthenticatedLocals>): Promise<Response> => {
+    const code = String(req.params.code || '').trim();
+
+    if (!code) {
+      return res.status(400).json({ success: false, message: 'path param code is required' });
+    }
+
+    try {
+      return sendAdminPromoResult(res, await setAdminPromoCodeActive(code, isActive, actorOf(res)));
+    } catch (error) {
+      return adminServerError(res, `failed to ${isActive ? 'enable' : 'disable'} promo code`, error);
+    }
+  };
+
+export const postEnableAdminPromoCode = setActive(true);
+export const postDisableAdminPromoCode = setActive(false);

@@ -15,6 +15,7 @@ import {
   WithdrawalEvent,
   WithdrawalStatus,
 } from '../models/partnerPayout';
+import { PromoCodeItem } from '../models/promoCode';
 import { PromoCodeRedemptionItem } from '../models/promoCodeRedemption';
 import { RefundEvent, RefundItem, RefundStatus } from '../models/refund';
 import { dynamoDocClient } from './dynamo';
@@ -420,6 +421,67 @@ export const getPromoCodeByCode = async (
       Key: {
         code,
       },
+    }),
+  );
+
+export const scanAllPromoCodes = async (): Promise<Record<string, unknown>[]> => {
+  const items: Record<string, unknown>[] = [];
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+
+  do {
+    const page = await sendDynamoCommand<{
+      Items?: Record<string, unknown>[];
+      LastEvaluatedKey?: Record<string, unknown>;
+    }>(
+      new ScanCommand({
+        TableName: PROMO_CODE_TABLE_NAME,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+
+    items.push(...(page.Items || []));
+    exclusiveStartKey = page.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  return items;
+};
+
+/** Writes a new promo code; fails with ConditionalCheckFailedException if the code exists. */
+export const createPromoCode = async (promo: PromoCodeItem): Promise<void> => {
+  await sendDynamoCommand(
+    new PutCommand({
+      TableName: PROMO_CODE_TABLE_NAME,
+      Item: promo,
+      ConditionExpression: 'attribute_not_exists(#code)',
+      ExpressionAttributeNames: { '#code': 'code' },
+    }),
+  );
+};
+
+/** Fails with ConditionalCheckFailedException if the code does not exist. */
+export const setPromoCodeActive = async (
+  code: string,
+  isActive: boolean,
+  updatedBy: string,
+): Promise<{ Attributes?: Record<string, unknown> }> =>
+  sendDynamoCommand(
+    new UpdateCommand({
+      TableName: PROMO_CODE_TABLE_NAME,
+      Key: { code },
+      UpdateExpression: 'SET #isActive = :isActive, #updatedAt = :updatedAt, #updatedBy = :updatedBy',
+      ConditionExpression: 'attribute_exists(#code)',
+      ExpressionAttributeNames: {
+        '#code': 'code',
+        '#isActive': 'isActive',
+        '#updatedAt': 'updatedAt',
+        '#updatedBy': 'updatedBy',
+      },
+      ExpressionAttributeValues: {
+        ':isActive': isActive,
+        ':updatedAt': new Date().toISOString(),
+        ':updatedBy': updatedBy,
+      },
+      ReturnValues: 'ALL_NEW',
     }),
   );
 
