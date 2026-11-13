@@ -1,7 +1,7 @@
 import { getCurrentInvoke } from '@vendia/serverless-express';
 import { Request, Response } from 'express';
 
-import { webhookSourceAllowed } from '../../lib/xenithpay';
+import { getMerchantBalances, webhookSourceAllowed } from '../../lib/xenithpay';
 import { AuthenticatedLocals, getAuth0Email } from '../../middlewares/auth0BearerAuth';
 import {
   OPEN_WITHDRAWAL_STATUSES,
@@ -264,6 +264,29 @@ export const getWithdrawalChannels = async (_req: Request, res: Response): Promi
       success: false,
       reason: 'PAYOUT_UNAVAILABLE',
       message: 'payout channels are not available right now',
+      error: error instanceof Error ? error.message : 'unknown error',
+    });
+  }
+};
+
+/** Finance: the XenithPay balance payouts are paid from (IDR row, plus any others). */
+export const getAdminPayoutBalance = async (_req: Request, res: Response): Promise<Response> => {
+  try {
+    const balances = await getMerchantBalances();
+    const idr = balances.find((item) => item.currency === 'IDR') || null;
+
+    return res.status(200).json({
+      success: true,
+      provider: 'XENITHPAY',
+      idr,
+      balances,
+      checkedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    return res.status(503).json({
+      success: false,
+      reason: 'PAYOUT_UNAVAILABLE',
+      message: 'XenithPay balance is not available right now',
       error: error instanceof Error ? error.message : 'unknown error',
     });
   }

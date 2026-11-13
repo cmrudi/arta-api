@@ -2,6 +2,7 @@ import { Router } from 'express';
 
 import {
   getAdminPartnerWallet,
+  getAdminPayoutBalance,
   getAdminPartnerWallets,
   getAdminPartnerWithdrawal,
   getAdminPartnerWithdrawals,
@@ -44,6 +45,8 @@ partnerPayoutRouter.get('/admin/partner-wallets', requireFinance, getAdminPartne
 partnerPayoutRouter.get('/admin/partner-wallets/:partnerId', requireFinance, getAdminPartnerWallet);
 partnerPayoutRouter.post('/admin/partner-wallets/adjustments', requireFinance, postAdminPartnerAdjustment);
 partnerPayoutRouter.get('/admin/partner-withdrawals', requireFinance, getAdminPartnerWithdrawals);
+// XenithPay account balance - what approved payouts are paid from.
+partnerPayoutRouter.get('/admin/payout-balance', requireFinance, getAdminPayoutBalance);
 partnerPayoutRouter.get('/admin/partner-withdrawals/:withdrawalId', requireFinance, getAdminPartnerWithdrawal);
 partnerPayoutRouter.post(
   '/admin/partner-withdrawals/:withdrawalId/approve',
