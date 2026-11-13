@@ -1,5 +1,7 @@
+import { getCurrentInvoke } from '@vendia/serverless-express';
 import { Request, Response } from 'express';
 
+import { webhookSourceAllowed } from '../../lib/xenithpay';
 import { AuthenticatedLocals, getAuth0Email } from '../../middlewares/auth0BearerAuth';
 import {
   OPEN_WITHDRAWAL_STATUSES,
@@ -13,6 +15,10 @@ import {
   adjustPartnerBalance,
   approvePartnerWithdrawal,
   cancelPartnerWithdrawal,
+  checkWithdrawalAccount,
+  handleXenithPayWebhook,
+  listWithdrawalChannels,
+  sendWithdrawalPayout,
   getPartnerPayoutSummary,
   getPartnerWalletDetail,
   getPartnerWithdrawal,
@@ -34,6 +40,9 @@ const STATUS_BY_REASON: Record<string, number> = {
   INVALID_STATE: 409,
   INSUFFICIENT_BALANCE: 422,
   AMOUNT_BELOW_MINIMUM: 422,
+  ACCOUNT_NOT_FOUND: 422,
+  ACCOUNT_CHECK_UNAVAILABLE: 503,
+  PAYOUT_UNAVAILABLE: 503,
 };
 
 const param = (req: Request, name: string): string => String(req.params[name] || '').trim();
@@ -240,4 +249,78 @@ export const postPayPartnerWithdrawal = async (
   } catch (error) {
     return serverError(res, 'failed to mark withdrawal paid', error);
   }
+};
+
+// ---------------------------------------------------------------------------
+// Payout destinations (partner portal) and XenithPay
+
+export const getWithdrawalChannels = async (_req: Request, res: Response): Promise<Response> => {
+  try {
+    const items = await listWithdrawalChannels();
+
+    return res.status(200).json({ success: true, count: items.length, items });
+  } catch (error) {
+    return res.status(503).json({
+      success: false,
+      reason: 'PAYOUT_UNAVAILABLE',
+      message: 'payout channels are not available right now',
+      error: error instanceof Error ? error.message : 'unknown error',
+    });
+  }
+};
+
+export const postCheckWithdrawalAccount = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const result = await checkWithdrawalAccount(body(req));
+
+    return result.success ? res.status(200).json(result) : fail(res, result);
+  } catch (error) {
+    return serverError(res, 'failed to check account', error);
+  }
+};
+
+export const postSendPartnerWithdrawalPayout = async (
+  req: Request,
+  res: Response<unknown, AuthenticatedLocals>,
+): Promise<Response> => {
+  try {
+    return sendWithdrawal(res, await sendWithdrawalPayout(param(req, 'withdrawalId'), actorOf(res)));
+  } catch (error) {
+    return serverError(res, 'failed to send payout', error);
+  }
+};
+
+// The caller's IP as API Gateway saw it (not a header the caller could set).
+const sourceIpOf = (req: Request): string => {
+  try {
+    const invoke = getCurrentInvoke() as { event?: { requestContext?: { identity?: { sourceIp?: string } } } };
+    const fromGateway = invoke?.event?.requestContext?.identity?.sourceIp;
+
+    if (fromGateway) {
+      return fromGateway;
+    }
+  } catch {
+    // not running behind API Gateway (local server, tests)
+  }
+
+  return req.socket?.remoteAddress?.replace(/^::ffff:/, '') || '';
+};
+
+/** Public: XenithPay calls this; the signature check is inside the service. */
+export const postXenithPayWebhook = async (req: Request, res: Response): Promise<Response> => {
+  const sourceIp = sourceIpOf(req);
+
+  if (!webhookSourceAllowed(sourceIp)) {
+    console.warn('[xenithpay] webhook rejected: source IP not allowed', sourceIp);
+    return res.status(403).json({ success: false, message: 'forbidden' });
+  }
+
+  const rawBody = (req as unknown as { rawBody?: string }).rawBody ?? JSON.stringify(req.body ?? {});
+  const result = await handleXenithPayWebhook({
+    rawBody,
+    signature: String(req.header('x-xenith-signature') || ''),
+    timestamp: String(req.header('x-xenith-timestamp') || ''),
+  });
+
+  return res.status(result.status).json(result.body);
 };

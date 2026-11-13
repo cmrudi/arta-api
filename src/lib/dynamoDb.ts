@@ -1017,10 +1017,10 @@ export const queryPartnerWithdrawalsByPartnerId = async (
  * Move a withdrawal from one of `from` to `to` and record the event. What
  * happens to the wallet depends on where it lands:
  *
- *   APPROVED            wallet untouched
- *   PAID                onHold -= amount, totalPaidOut += amount, close it
- *   REJECTED/CANCELLED  onHold -= amount, balance += amount, close it, and
- *                       write the WITHDRAWAL_RETURNED ledger entry
+ *   APPROVED/PROCESSING        wallet untouched
+ *   PAID                       onHold -= amount, totalPaidOut += amount, close it
+ *   REJECTED/CANCELLED/FAILED  onHold -= amount, balance += amount, close it,
+ *                              and write the WITHDRAWAL_RETURNED ledger entry
  *
  * The status condition makes a double-click a TransactionCanceledException
  * instead of paying or refunding twice; the openWithdrawalId condition keeps
@@ -1076,7 +1076,7 @@ export const transitionPartnerWithdrawal = async (params: {
     },
   ];
 
-  const releases = params.to === 'REJECTED' || params.to === 'CANCELLED';
+  const releases = params.to === 'REJECTED' || params.to === 'CANCELLED' || params.to === 'FAILED';
 
   if (params.to === 'PAID' || releases) {
     transactItems.push({
@@ -1313,4 +1313,37 @@ export const queryPublishedEsimOrdersByPartnerId = async (
   } while (exclusiveStartKey && items.length < cap);
 
   return items.slice(0, cap);
+};
+
+/**
+ * Record payout details on a withdrawal without changing its status, only
+ * while it still has the status we expect (e.g. the XenithPay payout id, or
+ * the last error sending it).
+ */
+export const setPartnerWithdrawalFields = async (params: {
+  withdrawalId: string;
+  expectedStatus: WithdrawalStatus;
+  set: Record<string, unknown>;
+  now: string;
+}): Promise<void> => {
+  const names: Record<string, string> = { '#status': 'status', '#updatedAt': 'updatedAt' };
+  const values: Record<string, unknown> = { ':expected': params.expectedStatus, ':now': params.now };
+  const assignments = ['#updatedAt = :now'];
+
+  Object.entries(params.set).forEach(([key, value], index) => {
+    names[`#f${index}`] = key;
+    values[`:v${index}`] = value;
+    assignments.push(`#f${index} = :v${index}`);
+  });
+
+  await sendDynamoCommand(
+    new UpdateCommand({
+      TableName: PARTNER_WITHDRAWAL_TABLE_NAME,
+      Key: { withdrawalId: params.withdrawalId },
+      UpdateExpression: `SET ${assignments.join(', ')}`,
+      ConditionExpression: '#status = :expected',
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+    }),
+  );
 };

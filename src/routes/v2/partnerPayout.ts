@@ -12,6 +12,10 @@ import {
   postMyPartnerWithdrawal,
   postPayPartnerWithdrawal,
   postRejectPartnerWithdrawal,
+  getWithdrawalChannels,
+  postCheckWithdrawalAccount,
+  postSendPartnerWithdrawalPayout,
+  postXenithPayWebhook,
 } from '../../controllers/v2/partnerPayoutController';
 import { requireAuth0Bearer } from '../../middlewares/auth0BearerAuth';
 import { requireAuth0EndUser } from '../../middlewares/auth0EndUserAuth';
@@ -24,6 +28,9 @@ const partnerPayoutRouter = Router();
 // the email on that token (email -> partnerId), never from anything the client sends.
 partnerPayoutRouter.get('/partner/wallet', requireAuth0EndUser, getMyPartnerWallet);
 partnerPayoutRouter.post('/partner/withdrawals', requireAuth0EndUser, postMyPartnerWithdrawal);
+// Where the money can go (XenithPay banks + e-wallets) and who owns an account.
+partnerPayoutRouter.get('/partner/payout-channels', requireAuth0EndUser, getWithdrawalChannels);
+partnerPayoutRouter.post('/partner/payout-accounts/check', requireAuth0EndUser, postCheckWithdrawalAccount);
 partnerPayoutRouter.post(
   '/partner/withdrawals/:withdrawalId/cancel',
   requireAuth0EndUser,
@@ -49,5 +56,14 @@ partnerPayoutRouter.post(
   postRejectPartnerWithdrawal,
 );
 partnerPayoutRouter.post('/admin/partner-withdrawals/:withdrawalId/pay', requireFinance, postPayPartnerWithdrawal);
+// Approve sends the payout through XenithPay; this retries one that could not be sent.
+partnerPayoutRouter.post(
+  '/admin/partner-withdrawals/:withdrawalId/send-payout',
+  requireFinance,
+  postSendPartnerWithdrawalPayout,
+);
+
+// XenithPay payout status callbacks (verified by signature, no login).
+partnerPayoutRouter.post('/webhooks/xenithpay', postXenithPayWebhook);
 
 export default partnerPayoutRouter;

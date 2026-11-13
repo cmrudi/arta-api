@@ -26,7 +26,15 @@ app.use(
   }),
 );
 app.use(cors());
-app.use(express.json());
+// Keep the exact request bytes: webhook signatures (XenithPay) are computed
+// over the raw body, which re-serialising the parsed JSON would not reproduce.
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      (req as unknown as { rawBody?: string }).rawBody = buf.toString('utf8');
+    },
+  }),
+);
 app.use(morgan('dev'));
 app.use('/docs', (req, res, next) => {
   const forwardedProto = req.get('x-forwarded-proto');

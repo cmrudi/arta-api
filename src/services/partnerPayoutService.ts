@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import {
   adjustPartnerWallet,
   createPartnerWithdrawal,
+  setPartnerWithdrawalFields,
   getPartnerWallet,
   getPartnerWithdrawalById,
   queryPartnerLedgerByPartnerId,
@@ -14,13 +15,26 @@ import {
 import {
   MAX_ADJUSTMENT_AMOUNT,
   MAX_PAYOUT_NOTE_LENGTH,
-  OPEN_WITHDRAWAL_STATUSES,
   PartnerBankAccount,
+  PayoutMethod,
+  REVIEWABLE_WITHDRAWAL_STATUSES,
   PartnerLedgerEntry,
   PartnerWithdrawal,
   WithdrawalStatus,
   minWithdrawalAmount,
+  withdrawalFee,
 } from '../models/partnerPayout';
+import {
+  PayoutChannel,
+  XenithPayError,
+  XenithPayout,
+  createPayout,
+  getPayout,
+  inquireAccount,
+  listPayoutChannels,
+  verifyWebhookSignature,
+  xenithPayConfigured,
+} from '../lib/xenithpay';
 import { isPartnerId } from '../models/partner';
 import { findPartnerByEmail, findPartnerById } from './partnerService';
 import { sendPartnerPayoutEmail } from './partnerPayoutEmailService';
@@ -60,7 +74,12 @@ export type PayoutFailureReason =
   | 'WITHDRAWAL_OPEN'
   | 'WITHDRAWAL_NOT_FOUND'
   | 'NOT_OWNER'
-  | 'INVALID_STATE';
+  | 'INVALID_STATE'
+  | 'INVALID_PAYOUT_CHANNEL'
+  | 'ACCOUNT_NOT_FOUND'
+  | 'ACCOUNT_CHECK_UNAVAILABLE'
+  | 'PAYOUT_UNAVAILABLE'
+  | 'NO_PAYOUT_CHANNEL';
 
 export type PayoutFailure = { success: false; reason: PayoutFailureReason; message: string } & Record<
   string,
@@ -120,24 +139,23 @@ const parseNote = (value: unknown): { note?: string; tooLong: boolean } => {
 };
 
 /**
- * Bank name and holder are free text; the account number keeps digits only so
- * "123-456 789" and "123456789" are the same account.
+ * Where the partner wants the money: XenithPay payout method + channel code
+ * and the account number (digits only, so "123-456 789" and "123456789" are
+ * the same account; e-wallets use the phone number).
  */
-const parseBankAccount = (value: unknown): PartnerBankAccount | null => {
+const parseDestination = (
+  value: unknown,
+): { method: PayoutMethod; channel: string; accountNumber: string } | null => {
   if (!value || typeof value !== 'object') {
     return null;
   }
 
   const raw = value as Record<string, unknown>;
-  const bankName = str(raw.bankName);
-  const accountName = str(raw.accountName);
+  const method = str(raw.method).toUpperCase();
+  const channel = str(raw.channel).toUpperCase();
   const accountNumber = str(raw.accountNumber).replace(/[\s-]/g, '');
 
-  if (bankName.length < 2 || bankName.length > 60) {
-    return null;
-  }
-
-  if (accountName.length < 2 || accountName.length > 100) {
+  if ((method !== 'BANK_TRANSFER' && method !== 'EWALLET') || !/^[A-Z0-9_]{3,30}$/.test(channel)) {
     return null;
   }
 
@@ -145,7 +163,80 @@ const parseBankAccount = (value: unknown): PartnerBankAccount | null => {
     return null;
   }
 
-  return { bankName, accountNumber, accountName };
+  return { method, channel, accountNumber };
+};
+
+// The channel list barely changes; keep it per Lambda instance for an hour.
+const CHANNELS_TTL_MS = 60 * 60 * 1000;
+let channelsCache: { at: number; items: PayoutChannel[] } | undefined;
+
+export const listWithdrawalChannels = async (): Promise<PayoutChannel[]> => {
+  if (channelsCache && Date.now() - channelsCache.at < CHANNELS_TTL_MS) {
+    return channelsCache.items;
+  }
+
+  const items = (await listPayoutChannels()).sort(
+    (a, b) => a.method.localeCompare(b.method) || a.name.localeCompare(b.name),
+  );
+  channelsCache = { at: Date.now(), items };
+  return items;
+};
+
+export type AccountCheckResult = { success: true; bankAccount: PartnerBankAccount } | PayoutFailure;
+
+/**
+ * Ask XenithPay who owns the account. The holder name it returns is the one
+ * the payout must carry, so it is never taken from the partner's input.
+ */
+export const checkWithdrawalAccount = async (value: unknown): Promise<AccountCheckResult> => {
+  const destination = parseDestination(value);
+
+  if (!destination) {
+    return fail(
+      'INVALID_BANK_ACCOUNT',
+      'choose a bank or e-wallet (method + channel) and enter an account number of 5-20 digits',
+    );
+  }
+
+  if (!xenithPayConfigured()) {
+    return fail('PAYOUT_UNAVAILABLE', 'payouts are not available right now');
+  }
+
+  try {
+    const channel = (await listWithdrawalChannels()).find(
+      (item) => item.channel === destination.channel && item.method === destination.method,
+    );
+
+    if (!channel) {
+      return fail('INVALID_PAYOUT_CHANNEL', 'this bank / e-wallet is not available for payouts');
+    }
+
+    const inquiry = await inquireAccount(destination);
+
+    if (!inquiry.valid) {
+      return fail('ACCOUNT_NOT_FOUND', 'the account could not be found; check the number and the bank', {
+        failedReason: inquiry.reason,
+      });
+    }
+
+    return {
+      success: true,
+      bankAccount: {
+        bankName: channel.name,
+        accountNumber: destination.accountNumber,
+        accountName: inquiry.accountName,
+        method: destination.method,
+        channel: destination.channel,
+      },
+    };
+  } catch (error) {
+    if (error instanceof XenithPayError && error.code === 'NOT_CONFIGURED') {
+      return fail('PAYOUT_UNAVAILABLE', 'payouts are not available right now');
+    }
+
+    console.error('[partnerPayout] account check failed', error);
+    return fail('ACCOUNT_CHECK_UNAVAILABLE', 'the account could not be checked right now; try again shortly');
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -154,6 +245,8 @@ const parseBankAccount = (value: unknown): PartnerBankAccount | null => {
 export type PartnerPayoutSummary = {
   wallet: WalletView;
   minWithdrawal: number;
+  /** Fee taken from each withdrawal; the partner receives amount - fee. */
+  withdrawalFee: number;
   openWithdrawal?: Record<string, unknown>;
   withdrawals: Record<string, unknown>[];
   ledger: Record<string, unknown>[];
@@ -224,6 +317,7 @@ export const getPartnerPayoutSummary = async (
     success: true,
     wallet,
     minWithdrawal: minWithdrawalAmount(),
+    withdrawalFee: withdrawalFee(),
     openWithdrawal: openWithdrawal ? toPartnerWithdrawalView(openWithdrawal) : undefined,
     withdrawals: withdrawals.map(toPartnerWithdrawalView),
     ledger: ledger.map(forPartnerLedger),
@@ -251,12 +345,16 @@ export const requestPartnerWithdrawal = async (params: {
     return fail('AMOUNT_BELOW_MINIMUM', `the minimum withdrawal is ${minimum}`, { minWithdrawal: minimum });
   }
 
-  const bankAccount = parseBankAccount(params.bankAccount);
+  const fee = withdrawalFee();
 
-  if (!bankAccount) {
+  if (amount <= fee) {
+    return fail('AMOUNT_BELOW_MINIMUM', `the amount must be more than the ${fee} fee`, { minWithdrawal: minimum });
+  }
+
+  if (!parseDestination(params.bankAccount)) {
     return fail(
       'INVALID_BANK_ACCOUNT',
-      'bankAccount needs bankName, accountName and an accountNumber of 5-20 digits',
+      'choose a bank or e-wallet (method + channel) and enter an account number of 5-20 digits',
     );
   }
 
@@ -293,6 +391,14 @@ export const requestPartnerWithdrawal = async (params: {
     });
   }
 
+  // Only now, with a request that can go through, ask XenithPay about the account.
+  const checked = await checkWithdrawalAccount(params.bankAccount);
+
+  if (!checked.success) {
+    return checked;
+  }
+
+  const { bankAccount } = checked;
   const now = new Date().toISOString();
   const withdrawalId = `WD-${randomUUID().slice(0, 8).toUpperCase()}`;
   const withdrawal: PartnerWithdrawal = {
@@ -302,6 +408,8 @@ export const requestPartnerWithdrawal = async (params: {
     ...(wallet.partnerKey ? { partnerKey: wallet.partnerKey } : {}),
     ...(wallet.partnerName ? { partnerName: wallet.partnerName } : {}),
     amount,
+    fee,
+    payoutAmount: amount - fee,
     bankAccount,
     ...(note ? { note } : {}),
     status: 'PENDING_REVIEW',
@@ -564,7 +672,7 @@ const runTransition = async (
   },
 ): Promise<WithdrawalResult> => {
   const at = new Date().toISOString();
-  const releases = params.to === 'REJECTED' || params.to === 'CANCELLED';
+  const releases = params.to === 'REJECTED' || params.to === 'CANCELLED' || params.to === 'FAILED';
 
   try {
     await transitionPartnerWithdrawal({
@@ -612,6 +720,12 @@ const loadForFinance = async (
 };
 
 /** Finance confirms the request and will transfer; the partner sees "Disetujui". */
+/**
+ * Finance approves: the request becomes APPROVED and the payout is sent
+ * through XenithPay straight away (PROCESSING). If it cannot be sent, the
+ * withdrawal stays APPROVED with `payoutError`; finance can retry with
+ * sendWithdrawalPayout, pay by hand, or reject.
+ */
 export const approvePartnerWithdrawal = async (withdrawalId: string, by: string): Promise<WithdrawalResult> => {
   const loaded = await loadForFinance(withdrawalId, ['PENDING_REVIEW']);
 
@@ -619,12 +733,261 @@ export const approvePartnerWithdrawal = async (withdrawalId: string, by: string)
     return loaded;
   }
 
-  return runTransition(loaded.withdrawal, {
+  const approved = await runTransition(loaded.withdrawal, {
     from: ['PENDING_REVIEW'],
     to: 'APPROVED',
     by,
     set: { reviewedBy: by, reviewedAt: new Date().toISOString() },
   });
+
+  return approved.success ? sendWithdrawalPayout(withdrawalId, by) : approved;
+};
+
+const xenithCallbackUrl = (): string =>
+  (process.env.XENITHPAY_CALLBACK_URL || 'https://api.artamobile.id/v2/webhooks/xenithpay').trim();
+
+const errorText = (error: unknown): string =>
+  error instanceof XenithPayError ? `${error.code}: ${error.message}` : error instanceof Error ? error.message : 'unknown error';
+
+/**
+ * Send (or re-send) the payout of an APPROVED withdrawal through XenithPay.
+ *
+ * Idempotency: the key and referenceCode are "<withdrawalId>.<attempt>". After
+ * an uncertain failure (timeout / 5xx / network) the same attempt is retried,
+ * so XenithPay itself refuses a second payout (DUPLICATE_TRANSACTION_ERROR),
+ * which we read as "it was created" - the webhook, found by referenceCode,
+ * then settles it. After a definite failure (e.g. invalid account) the next
+ * try uses a new attempt number.
+ */
+export const sendWithdrawalPayout = async (withdrawalId: string, by: string): Promise<WithdrawalResult> => {
+  const loaded = await loadForFinance(withdrawalId, ['APPROVED']);
+
+  if ('success' in loaded) {
+    return loaded;
+  }
+
+  const withdrawal = loaded.withdrawal;
+  const bank = (withdrawal.bankAccount || {}) as PartnerBankAccount;
+  const now = (): string => new Date().toISOString();
+  const record = async (set: Record<string, unknown>): Promise<WithdrawalResult> => {
+    await setPartnerWithdrawalFields({ withdrawalId, expectedStatus: 'APPROVED', set, now: now() }).catch((error) =>
+      console.error('[partnerPayout] could not record payout state', withdrawalId, error),
+    );
+    return { success: true, withdrawal: (await loadWithdrawal(withdrawalId)) || withdrawal };
+  };
+
+  if (!bank.method || !bank.channel) {
+    return record({ payoutError: 'NO_PAYOUT_CHANNEL: this request has no bank/e-wallet code; pay it by hand' });
+  }
+
+  const uncertain = withdrawal.payoutUncertain === true;
+  const attempt = uncertain ? num(withdrawal.payoutAttempt) || 1 : num(withdrawal.payoutAttempt) + 1;
+  const reference = `${withdrawalId}.${attempt}`;
+  const amount = num(withdrawal.payoutAmount) || num(withdrawal.amount);
+
+  let payout: XenithPayout | undefined;
+
+  try {
+    payout = await createPayout({
+      idempotencyKey: reference,
+      referenceCode: reference,
+      customerReference: str(withdrawal.partnerId),
+      amount,
+      method: bank.method,
+      channel: bank.channel,
+      accountNumber: bank.accountNumber,
+      accountName: bank.accountName,
+      description: `Komisi Arta Mobile ${withdrawalId}`,
+      callbackUrl: xenithCallbackUrl(),
+    });
+  } catch (error) {
+    if (error instanceof XenithPayError && error.code === 'DUPLICATE_TRANSACTION_ERROR' && uncertain) {
+      // The earlier, uncertain attempt did create it.
+      return runTransition(withdrawal, {
+        from: ['APPROVED'],
+        to: 'PROCESSING',
+        by,
+        note: 'Payout sent through XenithPay',
+        set: { payoutProvider: 'XENITHPAY', payoutAttempt: attempt, payoutUncertain: false, payoutSentAt: now(), payoutError: '' },
+      });
+    }
+
+    console.error('[partnerPayout] XenithPay payout not created', withdrawalId, errorText(error));
+    return record({
+      payoutAttempt: attempt,
+      payoutUncertain: error instanceof XenithPayError ? error.uncertain && error.code !== 'NOT_CONFIGURED' : true,
+      payoutError: errorText(error),
+    });
+  }
+
+  const sent = await runTransition(withdrawal, {
+    from: ['APPROVED'],
+    to: 'PROCESSING',
+    by,
+    note: 'Payout sent through XenithPay',
+    set: {
+      payoutProvider: 'XENITHPAY',
+      payoutId: payout.id,
+      payoutStatus: payout.status,
+      payoutAttempt: attempt,
+      payoutUncertain: false,
+      payoutSentAt: now(),
+      payoutError: '',
+    },
+  });
+
+  // XenithPay may already answer with a final status.
+  return sent.success && payout.status !== 'PENDING' ? applyPayoutUpdate(sent.withdrawal, payout) : sent;
+};
+
+/**
+ * Move a withdrawal according to a XenithPay payout status (from the webhook
+ * or a status check). Safe to call more than once: every move is conditional
+ * on the current status.
+ */
+export const applyPayoutUpdate = async (
+  withdrawal: Record<string, unknown>,
+  payout: XenithPayout,
+): Promise<WithdrawalResult> => {
+  const withdrawalId = str(withdrawal.withdrawalId);
+  const status = String(withdrawal.status);
+  const now = new Date().toISOString();
+  const by = 'XenithPay';
+  const base = { payoutProvider: 'XENITHPAY', payoutStatus: payout.status, ...(payout.id ? { payoutId: payout.id } : {}) };
+  const unchanged = async (): Promise<WithdrawalResult> => ({
+    success: true,
+    withdrawal: (await loadWithdrawal(withdrawalId)) || withdrawal,
+  });
+
+  if (payout.status === 'SUCCESS' && (status === 'APPROVED' || status === 'PROCESSING')) {
+    const result = await runTransition(withdrawal, {
+      from: ['APPROVED', 'PROCESSING'],
+      to: 'PAID',
+      by,
+      note: `XenithPay ${payout.id}`,
+      set: { ...base, transferReference: payout.id, paidBy: by, paidAt: now, payoutError: '' },
+    });
+
+    if (result.success) {
+      await sendPartnerPayoutEmail('PAID', await withCurrentEmail(result.withdrawal));
+    }
+
+    return result;
+  }
+
+  if ((payout.status === 'FAILED' || payout.status === 'CANCELLED') && (status === 'APPROVED' || status === 'PROCESSING')) {
+    const reason = str(payout.errorMessage) || str(payout.errorCode) || payout.status;
+    const result = await runTransition(withdrawal, {
+      from: ['APPROVED', 'PROCESSING'],
+      to: 'FAILED',
+      by,
+      note: `Transfer gagal: ${reason}`,
+      set: {
+        ...base,
+        failedReason: str(payout.errorCode) || payout.status,
+        rejectReason: `Transfer gagal (${reason}). Saldo sudah dikembalikan; silakan ajukan lagi atau hubungi CS.`,
+        payoutError: reason,
+      },
+    });
+
+    if (result.success) {
+      await sendPartnerPayoutEmail('REJECTED', await withCurrentEmail(result.withdrawal));
+    }
+
+    return result;
+  }
+
+  if (payout.status === 'PENDING' && status === 'APPROVED') {
+    return runTransition(withdrawal, {
+      from: ['APPROVED'],
+      to: 'PROCESSING',
+      by,
+      note: 'Payout sent through XenithPay',
+      set: { ...base, payoutSentAt: now, payoutUncertain: false, payoutError: '' },
+    });
+  }
+
+  if (payout.status === 'REFUNDED' && status === 'PAID') {
+    // The money came back to Arta after the transfer looked successful. Do
+    // not move balances automatically; flag it for finance.
+    console.warn('[partnerPayout] XenithPay payout refunded after success', withdrawalId, payout.id);
+    await setPartnerWithdrawalFields({
+      withdrawalId,
+      expectedStatus: 'PAID',
+      set: { payoutStatus: 'REFUNDED', payoutError: 'XenithPay reports this payout was REFUNDED after success; check and re-pay or credit back by hand' },
+      now,
+    }).catch(() => undefined);
+    return unchanged();
+  }
+
+  return unchanged();
+};
+
+export type WebhookResult = { status: 200 | 401 | 500; body: Record<string, unknown> };
+
+/**
+ * XenithPay payout webhook. Verified with the Webhook Signature Secret over
+ * the raw body, then the payout is re-read from XenithPay so the status we
+ * act on comes from their API, not from the request alone.
+ */
+export const handleXenithPayWebhook = async (params: {
+  rawBody: string;
+  signature: string;
+  timestamp: string;
+}): Promise<WebhookResult> => {
+  const path = new URL(xenithCallbackUrl()).pathname;
+
+  if (!verifyWebhookSignature({ method: 'POST', path, rawBody: params.rawBody, timestamp: params.timestamp, signature: params.signature })) {
+    console.warn('[xenithpay] webhook rejected: bad signature');
+    return { status: 401, body: { success: false, message: 'invalid signature' } };
+  }
+
+  let data: Record<string, unknown>;
+
+  try {
+    data = ((JSON.parse(params.rawBody) as Record<string, unknown>).data || {}) as Record<string, unknown>;
+  } catch {
+    return { status: 200, body: { success: true, ignored: 'unparseable body' } };
+  }
+
+  const reference = str(data.referenceCode);
+  const withdrawalId = reference.split('.')[0];
+
+  if (!withdrawalId.startsWith('WD-')) {
+    return { status: 200, body: { success: true, ignored: 'not a partner withdrawal' } };
+  }
+
+  try {
+    const withdrawal = await loadWithdrawal(withdrawalId);
+
+    if (!withdrawal) {
+      console.warn('[xenithpay] webhook for unknown withdrawal', reference, data.id);
+      return { status: 200, body: { success: true, ignored: 'unknown withdrawal' } };
+    }
+
+    let payout = data as XenithPayout;
+
+    try {
+      const fresh = await getPayout(str(data.id));
+
+      if (str(fresh.referenceCode) === reference) {
+        payout = fresh;
+      }
+    } catch (error) {
+      console.warn('[xenithpay] could not re-read payout; using the signed webhook data', data.id, errorText(error));
+    }
+
+    const result = await applyPayoutUpdate(withdrawal, payout);
+
+    return {
+      status: 200,
+      body: { success: true, withdrawalId, status: result.success ? result.withdrawal.status : withdrawal.status },
+    };
+  } catch (error) {
+    console.error('[xenithpay] webhook processing failed', reference, error);
+    // Let XenithPay retry.
+    return { status: 500, body: { success: false, message: 'processing failed' } };
+  }
 };
 
 export const rejectPartnerWithdrawal = async (
@@ -642,14 +1005,14 @@ export const rejectPartnerWithdrawal = async (
     return fail('NOTE_TOO_LONG', `reason must be at most ${MAX_PAYOUT_NOTE_LENGTH} characters`);
   }
 
-  const loaded = await loadForFinance(withdrawalId, OPEN_WITHDRAWAL_STATUSES);
+  const loaded = await loadForFinance(withdrawalId, REVIEWABLE_WITHDRAWAL_STATUSES);
 
   if ('success' in loaded) {
     return loaded;
   }
 
   const result = await runTransition(loaded.withdrawal, {
-    from: OPEN_WITHDRAWAL_STATUSES,
+    from: REVIEWABLE_WITHDRAWAL_STATUSES,
     to: 'REJECTED',
     by,
     note: rejectReason,
@@ -685,7 +1048,7 @@ export const markPartnerWithdrawalPaid = async (
     return fail('NOTE_TOO_LONG', `note must be at most ${MAX_PAYOUT_NOTE_LENGTH} characters`);
   }
 
-  const loaded = await loadForFinance(withdrawalId, OPEN_WITHDRAWAL_STATUSES);
+  const loaded = await loadForFinance(withdrawalId, REVIEWABLE_WITHDRAWAL_STATUSES);
 
   if ('success' in loaded) {
     return loaded;
@@ -693,7 +1056,7 @@ export const markPartnerWithdrawalPaid = async (
 
   const now = new Date().toISOString();
   const result = await runTransition(loaded.withdrawal, {
-    from: OPEN_WITHDRAWAL_STATUSES,
+    from: REVIEWABLE_WITHDRAWAL_STATUSES,
     to: 'PAID',
     by,
     note: paidNote || `Ref: ${reference}`,

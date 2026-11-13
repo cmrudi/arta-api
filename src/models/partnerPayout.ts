@@ -20,10 +20,17 @@
  * three can never disagree.
  */
 
+export type PayoutMethod = 'BANK_TRANSFER' | 'EWALLET';
+
 export type PartnerBankAccount = {
+  /** Display name of the bank / e-wallet, e.g. "BANK BCA". */
   bankName: string;
   accountNumber: string;
+  /** Holder name as the bank returned it (XenithPay account inquiry). */
   accountName: string;
+  /** XenithPay payout method and channel code, e.g. BANK_TRANSFER / CENAIDJA. */
+  method?: PayoutMethod;
+  channel?: string;
 };
 
 export type PartnerWallet = {
@@ -71,18 +78,37 @@ export type PartnerLedgerEntry = {
 };
 
 /**
- * PENDING_REVIEW -> APPROVED -> PAID is the happy path; finance may also mark a
- * PENDING_REVIEW request PAID in one step. PENDING_REVIEW or APPROVED ->
- * REJECTED returns the money to the balance, and so does the partner cancelling
- * while it is still PENDING_REVIEW.
+ * PENDING_REVIEW -> APPROVED -> PROCESSING -> PAID is the happy path: finance
+ * approves, the payout is sent through XenithPay (PROCESSING), and XenithPay's
+ * webhook confirms it (PAID). If XenithPay reports it failed or cancelled the
+ * withdrawal becomes FAILED and the money returns to the balance.
+ *
+ * APPROVED without PROCESSING means the payout could not be sent yet (e.g.
+ * XenithPay unreachable or not configured); finance can retry or reject.
+ * Finance may still mark a PENDING_REVIEW / APPROVED request PAID by hand
+ * (bank transfer outside XenithPay). PENDING_REVIEW or APPROVED -> REJECTED
+ * returns the money, and so does the partner cancelling while it is still
+ * PENDING_REVIEW.
  */
-export const WITHDRAWAL_STATUSES = ['PENDING_REVIEW', 'APPROVED', 'PAID', 'REJECTED', 'CANCELLED'] as const;
+export const WITHDRAWAL_STATUSES = [
+  'PENDING_REVIEW',
+  'APPROVED',
+  'PROCESSING',
+  'PAID',
+  'REJECTED',
+  'CANCELLED',
+  'FAILED',
+] as const;
 export type WithdrawalStatus = (typeof WITHDRAWAL_STATUSES)[number];
 
 export const isWithdrawalStatus = (value: unknown): value is WithdrawalStatus =>
   typeof value === 'string' && (WITHDRAWAL_STATUSES as readonly string[]).includes(value);
 
-export const OPEN_WITHDRAWAL_STATUSES: readonly WithdrawalStatus[] = ['PENDING_REVIEW', 'APPROVED'];
+/** Still holding the partner's money (the wallet's openWithdrawalId points here). */
+export const OPEN_WITHDRAWAL_STATUSES: readonly WithdrawalStatus[] = ['PENDING_REVIEW', 'APPROVED', 'PROCESSING'];
+
+/** Finance may still decide these by hand (reject / mark paid); PROCESSING is up to XenithPay. */
+export const REVIEWABLE_WITHDRAWAL_STATUSES: readonly WithdrawalStatus[] = ['PENDING_REVIEW', 'APPROVED'];
 
 export type WithdrawalEvent = {
   at: string;
@@ -97,10 +123,23 @@ export type PartnerWithdrawal = {
   email: string;
   partnerKey?: string;
   partnerName?: string;
+  /** What leaves the partner's balance. */
   amount: number;
+  /** Withdrawal fee kept by Arta (PARTNER_WITHDRAWAL_FEE). */
+  fee?: number;
+  /** What is sent to the partner's account: amount - fee. */
+  payoutAmount?: number;
   bankAccount: PartnerBankAccount;
   note?: string;
   status: WithdrawalStatus;
+  /** XenithPay payout, once sent. */
+  payoutProvider?: 'XENITHPAY';
+  payoutId?: string;
+  payoutStatus?: string;
+  payoutSentAt?: string;
+  /** Last problem sending or completing the payout, for finance. */
+  payoutError?: string;
+  failedReason?: string;
   reviewedBy?: string;
   reviewedAt?: string;
   rejectReason?: string;
@@ -121,6 +160,13 @@ const envAmount = (name: string, fallback: number): number => {
 
 /** Smallest payout a partner may request, in IDR. */
 export const minWithdrawalAmount = (): number => envAmount('PARTNER_MIN_WITHDRAWAL', 500_000);
+
+/** Fee taken from each withdrawal, in IDR; the partner receives amount - fee. */
+export const withdrawalFee = (): number => {
+  const value = Number(process.env.PARTNER_WITHDRAWAL_FEE);
+
+  return Number.isInteger(value) && value >= 0 ? value : 6_500;
+};
 
 /** Largest single credit or debit finance may post, in IDR - a typo guard. */
 export const MAX_ADJUSTMENT_AMOUNT = 100_000_000;
