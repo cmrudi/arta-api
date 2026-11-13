@@ -258,3 +258,35 @@ export const webhookSourceAllowed = (sourceIp: string): boolean => {
 
   return list.length === 0 || (Boolean(sourceIp) && list.some((entry) => inRange(sourceIp.trim(), entry)));
 };
+
+// ---------------------------------------------------------------------------
+// Merchant balance (the money payouts are paid from)
+
+export type XenithBalance = {
+  currency: string;
+  available: number;
+  pending: number;
+  held: number;
+  frozen: number;
+  total: number;
+};
+
+const amount = (value: unknown): number => {
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+/** GET /v1/balances - one row per currency; XenithPay sends amounts as strings. */
+export const getMerchantBalances = async (): Promise<XenithBalance[]> => {
+  const result = await request<{ data?: Array<Record<string, unknown>> }>('getBalance');
+
+  return (result.data || []).map((item) => ({
+    currency: String(item.currency || ''),
+    available: amount(item.availableBalance),
+    pending: amount(item.pendingBalance),
+    held: amount(item.heldBalance),
+    frozen: amount(item.frozenBalance),
+    total: amount(item.totalBalance),
+  }));
+};
