@@ -4,7 +4,8 @@ import { sendBrevoTemplateEmail } from './brevoService';
  * Partner emails for withdrawals, all from one Brevo template:
  *
  *   REQUESTED - the request was stored and is waiting for finance
- *   PAID      - finance transferred the money; carries the transfer reference
+ *   PAID      - the money was transferred (automatically on the bank webhook,
+ *               or marked paid by finance); carries the transfer reference
  *   REJECTED  - finance turned it down; carries the reason
  *
  * Same shape as the refund emails: the template switches its copy on the
@@ -80,6 +81,10 @@ export const sendPartnerPayoutEmail = async (
   }
 
   const bank = (withdrawal.bankAccount || {}) as Record<string, unknown>;
+  // Withdrawals made through the bank-transfer flow carry a fee; the partner
+  // receives payoutAmount = amount - fee. Older ones have neither.
+  const fee = Number(withdrawal.fee) || 0;
+  const received = withdrawal.payoutAmount !== undefined ? Number(withdrawal.payoutAmount) : Number(withdrawal.amount) - fee;
   const params = {
     kind,
     subject: SUBJECTS[kind](withdrawalId),
@@ -90,6 +95,9 @@ export const sendPartnerPayoutEmail = async (
     partnerKey: str(withdrawal.partnerKey),
     partnerEmail: str(withdrawal.email),
     amount: formatRupiah(withdrawal.amount),
+    hasFee: fee > 0,
+    fee: formatRupiah(fee),
+    receivedAmount: formatRupiah(received),
     bankName: str(bank.bankName),
     accountNumber: maskAccountNumber(bank.accountNumber),
     accountName: str(bank.accountName),
