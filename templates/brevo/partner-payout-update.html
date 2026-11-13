@@ -17,11 +17,11 @@
 <tr><td style="padding:20px 24px 0;">
 {% if params.isRequested %}
 <h1 style="margin:0 0 8px;font-size:22px;line-height:30px;">Pengajuan pencairan diterima</h1>
-<p style="margin:0;font-size:15px;line-height:24px;color:#434343;">Kami sudah menerima pengajuan pencairan saldo mitra sebesar <b>{{ params.amount }}</b>. Tim finance Arta akan meninjau dan mentransfernya ke rekening di bawah.</p>
+<p style="margin:0;font-size:15px;line-height:24px;color:#434343;">Kami sudah menerima pengajuan pencairan saldo mitra sebesar <b>{{ params.amount }}</b>. Setelah disetujui tim finance Arta, {% if params.hasFee %}<b>{{ params.receivedAmount }}</b>{% else %}dananya{% endif %} akan ditransfer ke rekening di bawah.</p>
 {% endif %}
 {% if params.isPaid %}
 <h1 style="margin:0 0 8px;font-size:22px;line-height:30px;">Pencairan sudah ditransfer</h1>
-<p style="margin:0;font-size:15px;line-height:24px;color:#434343;">Dana sebesar <b>{{ params.amount }}</b> sudah kami transfer ke rekening kamu. Terima kasih sudah menjadi mitra Arta Mobile!</p>
+<p style="margin:0;font-size:15px;line-height:24px;color:#434343;">Dana sebesar <b>{{ params.receivedAmount }}</b> sudah kami transfer ke rekening kamu. Terima kasih sudah menjadi mitra Arta Mobile!</p>
 {% endif %}
 {% if params.isRejected %}
 <h1 style="margin:0 0 8px;font-size:22px;line-height:30px;">Pengajuan pencairan ditolak</h1>
@@ -42,7 +42,13 @@
 <tr><td style="padding:20px 24px 0;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="{% if params.isPaid %}background:#f6ffed;border:1px solid #b7eb8f;{% else %}background:#fafafa;{% endif %}border-radius:12px;font-size:14px;line-height:22px;">
 <tr><td style="padding:14px 16px 4px;color:#595959;">ID pencairan</td><td align="right" style="padding:14px 16px 4px;font-weight:700;">{{ params.withdrawalId }}</td></tr>
+{% if params.hasFee %}
+<tr><td style="padding:4px 16px;color:#595959;">Jumlah dicairkan</td><td align="right" style="padding:4px 16px;">{{ params.amount }}</td></tr>
+<tr><td style="padding:4px 16px;color:#595959;">Biaya transfer</td><td align="right" style="padding:4px 16px;">&minus; {{ params.fee }}</td></tr>
+<tr><td style="padding:4px 16px;color:#595959;">{% if params.isPaid %}Diterima{% else %}Akan diterima{% endif %}</td><td align="right" style="padding:4px 16px;font-weight:700;">{{ params.receivedAmount }}</td></tr>
+{% else %}
 <tr><td style="padding:4px 16px;color:#595959;">Jumlah</td><td align="right" style="padding:4px 16px;font-weight:700;">{{ params.amount }}</td></tr>
+{% endif %}
 <tr><td style="padding:4px 16px;color:#595959;">Bank</td><td align="right" style="padding:4px 16px;">{{ params.bankName }} {{ params.accountNumber }}</td></tr>
 <tr><td style="padding:4px 16px;color:#595959;">Atas nama</td><td align="right" style="padding:4px 16px;">{{ params.accountName }}</td></tr>
 {% if params.isPaid %}
