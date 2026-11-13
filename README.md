@@ -159,23 +159,44 @@ and `GET /v2/admin/partners` flags it (`duplicateEmail` / `duplicateKey`).
 
 ### Partner Payouts (v2)
 
-Semi-automated payouts for affiliate partners. Finance credits each partner's
-balance by hand (from the profit-sharing sheet); the partner requests a
-withdrawal in the partner portal; finance transfers the money by bank and marks
-it paid with the transfer reference. Every balance change is a ledger entry, and
-the wallet, ledger and withdrawal rows are always written in one transaction.
+Payouts for affiliate partners, sent through **XenithPay**. Finance credits each
+partner's balance; the partner requests a withdrawal in the partner portal to a
+bank or e-wallet; finance approves and the money is sent by XenithPay. Every
+balance change is a ledger entry, and the wallet, ledger and withdrawal rows are
+always written in one transaction.
 
-Lifecycle: `PENDING_REVIEW` → `APPROVED` → `PAID`. `PENDING_REVIEW` can go
-straight to `PAID`. `PENDING_REVIEW`/`APPROVED` → `REJECTED`, or the partner
-cancels while `PENDING_REVIEW` (`CANCELLED`); both return the amount to the
-balance. A partner has at most one open withdrawal.
+Lifecycle: `PENDING_REVIEW` → (finance approves) `APPROVED` → payout created at
+XenithPay `PROCESSING` → XenithPay webhook `PAID`, or `FAILED` (money back to
+the balance). A withdrawal that could not be sent stays `APPROVED` with
+`payoutError`; finance retries (`send-payout`), pays by hand (`pay`), or rejects.
+`PENDING_REVIEW`/`APPROVED` → `REJECTED`, or the partner cancels while
+`PENDING_REVIEW` (`CANCELLED`); both return the amount. A partner has at most one
+open withdrawal. Each withdrawal pays out `amount - fee` (`PARTNER_WITHDRAWAL_FEE`,
+default 6500); the whole `amount` leaves the balance.
+
+The account holder name always comes from XenithPay's account inquiry, never
+from the client. Payouts use idempotency key / referenceCode
+`<withdrawalId>.<attempt>`: an uncertain failure (timeout, 5xx) is retried with
+the same key, so XenithPay refuses a second payout; a definite failure moves to
+the next attempt.
 
 Partner routes (the portal's own Auth0 token; the wallet is the one for the
 token's email claim):
 
-- `GET /v2/partner/wallet` - balance, amount on hold, minimum, open withdrawal, history (404 `PARTNER_NOT_FOUND` when the login email has no partner account)
-- `POST /v2/partner/withdrawals` - `{ "amount": 750000, "bankAccount": { "bankName": "BCA", "accountNumber": "1234567890", "accountName": "Budi Santoso" }, "note": "optional" }`
+- `GET /v2/partner/wallet` - balance, amount on hold, minimum, `withdrawalFee`, open withdrawal, history (404 `PARTNER_NOT_FOUND` when the login email has no partner account)
+- `GET /v2/partner/payout-channels` - XenithPay IDR banks and e-wallets: `{ method, channel, name }` (cached 1h)
+- `POST /v2/partner/payout-accounts/check` - `{ "method": "BANK_TRANSFER", "channel": "CENAIDJA", "accountNumber": "1234567890" }` → `bankAccount` with the holder name from the bank. 422 `ACCOUNT_NOT_FOUND`, 503 `ACCOUNT_CHECK_UNAVAILABLE`
+- `POST /v2/partner/withdrawals` - `{ "amount": 750000, "bankAccount": { "method": "BANK_TRANSFER", "channel": "CENAIDJA", "accountNumber": "1234567890" }, "note": "optional" }` (the account is checked again here)
 - `POST /v2/partner/withdrawals/:withdrawalId/cancel`
+
+XenithPay calls `POST /v2/webhooks/xenithpay` (no login; verified with the
+webhook signature over the raw body, then the payout is re-read from XenithPay).
+
+Environment: `XENITHPAY_BASE_URL` (`https://openapi.sandbox.xenithpay.com` or
+`https://openapi.xenithpay.com`), `XENITHPAY_API_KEY`, `XENITHPAY_SECRET_KEY`,
+`XENITHPAY_WEBHOOK_SECRET`, `XENITHPAY_CALLBACK_URL` (default
+`https://api.artamobile.id/v2/webhooks/xenithpay`), `PARTNER_WITHDRAWAL_FEE`.
+Keys and the webhook secret are per XenithPay environment.
 
 Finance routes (arta-admin access token with the Auth0 `finance` role):
 
@@ -184,9 +205,10 @@ Finance routes (arta-admin access token with the Auth0 `finance` role):
 - `POST /v2/admin/partner-wallets/adjustments` - `{ "partnerId": "PTN-7K2M9QXA", "type": "CREDIT" | "DEBIT", "amount": 750000, "note": "Komisi Oktober 2026", "entryId": "<uuid>", "partnerKey": "budi", "partnerName": "Budi" }`. `email` (the partner's login email) may be given instead of `partnerId`. `entryId` makes a retried submit a no-op (409 `DUPLICATE_ENTRY`); the first credit creates the wallet.
 - `GET /v2/admin/partner-withdrawals?status=PENDING_REVIEW,APPROVED` (default: open ones)
 - `GET /v2/admin/partner-withdrawals/:withdrawalId`
-- `POST /v2/admin/partner-withdrawals/:withdrawalId/approve`
-- `POST /v2/admin/partner-withdrawals/:withdrawalId/reject` - `{ "reason": "..." }` (sent to the partner)
-- `POST /v2/admin/partner-withdrawals/:withdrawalId/pay` - `{ "transferReference": "...", "note": "optional" }`
+- `POST /v2/admin/partner-withdrawals/:withdrawalId/approve` - approves and sends the payout through XenithPay
+- `POST /v2/admin/partner-withdrawals/:withdrawalId/send-payout` - retry an `APPROVED` withdrawal whose payout could not be sent
+- `POST /v2/admin/partner-withdrawals/:withdrawalId/reject` - `{ "reason": "..." }` (sent to the partner; not while `PROCESSING`)
+- `POST /v2/admin/partner-withdrawals/:withdrawalId/pay` - `{ "transferReference": "...", "note": "optional" }` - paid by hand outside XenithPay (not while `PROCESSING`)
 
 DynamoDB tables (on-demand capacity is fine):
 
