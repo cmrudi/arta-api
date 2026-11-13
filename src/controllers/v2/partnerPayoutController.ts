@@ -1,5 +1,7 @@
+import { getCurrentInvoke } from '@vendia/serverless-express';
 import { Request, Response } from 'express';
 
+import { webhookSourceAllowed } from '../../lib/xenithpay';
 import { AuthenticatedLocals, getAuth0Email } from '../../middlewares/auth0BearerAuth';
 import {
   OPEN_WITHDRAWAL_STATUSES,
@@ -288,8 +290,31 @@ export const postSendPartnerWithdrawalPayout = async (
   }
 };
 
+// The caller's IP as API Gateway saw it (not a header the caller could set).
+const sourceIpOf = (req: Request): string => {
+  try {
+    const invoke = getCurrentInvoke() as { event?: { requestContext?: { identity?: { sourceIp?: string } } } };
+    const fromGateway = invoke?.event?.requestContext?.identity?.sourceIp;
+
+    if (fromGateway) {
+      return fromGateway;
+    }
+  } catch {
+    // not running behind API Gateway (local server, tests)
+  }
+
+  return req.socket?.remoteAddress?.replace(/^::ffff:/, '') || '';
+};
+
 /** Public: XenithPay calls this; the signature check is inside the service. */
 export const postXenithPayWebhook = async (req: Request, res: Response): Promise<Response> => {
+  const sourceIp = sourceIpOf(req);
+
+  if (!webhookSourceAllowed(sourceIp)) {
+    console.warn('[xenithpay] webhook rejected: source IP not allowed', sourceIp);
+    return res.status(403).json({ success: false, message: 'forbidden' });
+  }
+
   const rawBody = (req as unknown as { rawBody?: string }).rawBody ?? JSON.stringify(req.body ?? {});
   const result = await handleXenithPayWebhook({
     rawBody,

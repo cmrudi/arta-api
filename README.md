@@ -192,10 +192,22 @@ token's email claim):
 XenithPay calls `POST /v2/webhooks/xenithpay` (no login; verified with the
 webhook signature over the raw body, then the payout is re-read from XenithPay).
 
-Environment: `XENITHPAY_BASE_URL` (`https://openapi.sandbox.xenithpay.com` or
-`https://openapi.xenithpay.com`), `XENITHPAY_API_KEY`, `XENITHPAY_SECRET_KEY`,
-`XENITHPAY_WEBHOOK_SECRET`, `XENITHPAY_CALLBACK_URL` (default
-`https://api.artamobile.id/v2/webhooks/xenithpay`), `PARTNER_WITHDRAWAL_FEE`.
+arta-api never calls XenithPay directly. XenithPay only accepts API calls from
+IPs in its IP Whitelist, so every call goes through the **`xenithpayGateway`**
+Lambda (`lambdas/xenithpayGateway` outside this repo), which runs in the
+Montnets VPC/subnet behind the NAT gateway's fixed IP and holds the keys.
+
+Environment:
+
+- `xenithpayGateway`: `XENITHPAY_BASE_URL` (`https://openapi.sandbox.xenithpay.com`
+  or `https://openapi.xenithpay.com`), `XENITHPAY_API_KEY`, `XENITHPAY_SECRET_KEY`.
+- arta-api: `XENITHPAY_WEBHOOK_SECRET`, `XENITHPAY_GATEWAY_FUNCTION` (default
+  `xenithpayGateway`), `XENITHPAY_CALLBACK_URL` (default
+  `https://api.artamobile.id/v2/webhooks/xenithpay`), `PARTNER_WITHDRAWAL_FEE`,
+  optional `XENITHPAY_WEBHOOK_ALLOWED_IPS` (comma-separated IPv4 / CIDR allowed to
+  call the webhook; empty = signature check only), `XENITHPAY_DISABLED=true` to
+  switch payouts off.
+
 Keys and the webhook secret are per XenithPay environment.
 
 Finance routes (arta-admin access token with the Auth0 `finance` role):

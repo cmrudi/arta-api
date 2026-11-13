@@ -230,6 +230,10 @@ export const checkWithdrawalAccount = async (value: unknown): Promise<AccountChe
       },
     };
   } catch (error) {
+    if (error instanceof XenithPayError && error.code === 'NOT_CONFIGURED') {
+      return fail('PAYOUT_UNAVAILABLE', 'payouts are not available right now');
+    }
+
     console.error('[partnerPayout] account check failed', error);
     return fail('ACCOUNT_CHECK_UNAVAILABLE', 'the account could not be checked right now; try again shortly');
   }
