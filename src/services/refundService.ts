@@ -419,6 +419,17 @@ const runCancelStep = async (refund: Record<string, unknown>, actor: string): Pr
     return;
   }
 
+  // Asynchronous provider (Montnets): the cancel was accepted and its result
+  // arrives later as an EsimCancelResult event. Nothing waits for it here. If
+  // the event already moved the refund on, this transition is a no-op.
+  if (response.pending === true) {
+    await tryTransition(refund, ['APPROVED'], 'ESIM_CANCEL_PENDING', actor, {
+      esimCancelRequestedAt: new Date().toISOString(),
+      esimCancelResponse: response,
+    });
+    return;
+  }
+
   if (response.cancelled !== true) {
     await tryTransition(refund, ['APPROVED'], 'ESIM_CANCEL_FAILED', actor, {
       lastError: str(response.reason) || str(response.message) || 'eSIM was not cancelled',
@@ -435,6 +446,97 @@ const runCancelStep = async (refund: Record<string, unknown>, actor: string): Pr
   if (moved) {
     await runGatewayStep(refund, actor);
   }
+};
+
+/**
+ * The provider's answer to an asynchronous eSIM cancel, sent by refundExecute
+ * once the provider's callback arrives (Montnets delpack). Shaped like an
+ * EventBridge event so it can move onto a bus without changing this code.
+ */
+export type EsimCancelResultDetail = {
+  orderId: string;
+  provider?: string;
+  success: boolean;
+  error?: string;
+  acceptSn?: string[];
+  at?: string;
+};
+
+const ESIM_CANCEL_EVENT_ACTOR = 'system:esim-cancel-event';
+
+export const onEsimCancelResult = async (
+  detail: EsimCancelResultDetail,
+): Promise<{ handled: boolean; refundId?: string; status?: string; reason?: string }> => {
+  const orderId = str(detail.orderId);
+
+  if (!orderId) {
+    return { handled: false, reason: 'MISSING_ORDER_ID' };
+  }
+
+  // The Order row mirrors the refund that owns it.
+  const order = (await getOrderById(orderId)).Item;
+  const refundId = str(order?.refundId);
+
+  if (!refundId) {
+    // e.g. a refund run from the old admin button, which has no Refund row.
+    console.log('[refund] cancel result without a refund request', { orderId });
+    return { handled: false, reason: 'NO_REFUND_FOR_ORDER' };
+  }
+
+  const refund = (await getRefundById(refundId)).Item;
+
+  if (!refund) {
+    return { handled: false, refundId, reason: 'REFUND_NOT_FOUND' };
+  }
+
+  const result = { ...detail, receivedAt: new Date().toISOString() };
+
+  if (detail.success === true) {
+    // APPROVED too: the event can beat runCancelStep's own APPROVED ->
+    // ESIM_CANCEL_PENDING write. ESIM_CANCEL_FAILED too: a confirmed cancel
+    // means the eSIM is cancelled, whatever an earlier answer said.
+    const moved = await tryTransition(
+      refund,
+      ['APPROVED', 'ESIM_CANCEL_PENDING', 'ESIM_CANCEL_FAILED'],
+      'ESIM_CANCELLED',
+      ESIM_CANCEL_EVENT_ACTOR,
+      { esimCancelledAt: result.receivedAt, esimCancelResult: result },
+      { note: `${str(detail.provider) || 'provider'} confirmed the eSIM cancel` },
+    );
+
+    if (moved) {
+      await runGatewayStep(refund, ESIM_CANCEL_EVENT_ACTOR);
+    }
+
+    return reloadStatus(refundId, moved);
+  }
+
+  const moved = await tryTransition(
+    refund,
+    ['APPROVED', 'ESIM_CANCEL_PENDING'],
+    'ESIM_CANCEL_FAILED',
+    ESIM_CANCEL_EVENT_ACTOR,
+    {
+      lastError: str(detail.error) || 'Provider reported the eSIM cancel failed',
+      esimCancelResult: result,
+    },
+  );
+
+  return reloadStatus(refundId, moved);
+};
+
+const reloadStatus = async (
+  refundId: string,
+  moved: boolean,
+): Promise<{ handled: boolean; refundId: string; status?: string; reason?: string }> => {
+  const current = (await getRefundById(refundId)).Item;
+
+  return {
+    handled: moved,
+    refundId,
+    status: str(current?.status),
+    ...(moved ? {} : { reason: 'NOT_IN_EXPECTED_STATE' }),
+  };
 };
 
 export const approveRefund = async (
@@ -523,7 +625,12 @@ export const retryRefund = async (
   }
 
   const status = str(refund.status) as RefundStatus;
-  const cancelFromStatuses: RefundStatus[] = ['ESIM_CANCEL_FAILED', ...(isStuck(refund) ? ['APPROVED' as const] : [])];
+  // ESIM_CANCEL_PENDING counts as stuck when its result event never came;
+  // the retry asks refundExecute again, which answers from the provider state.
+  const cancelFromStatuses: RefundStatus[] = [
+    'ESIM_CANCEL_FAILED',
+    ...(isStuck(refund) ? (['APPROVED', 'ESIM_CANCEL_PENDING'] as const) : []),
+  ];
   const gatewayFromStatuses: RefundStatus[] = ['REFUND_FAILED', ...(isStuck(refund) ? ['ESIM_CANCELLED' as const] : [])];
 
   if (cancelFromStatuses.includes(status)) {
