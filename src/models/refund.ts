@@ -38,6 +38,10 @@ export type RefundItem = {
   rejectReason?: string;
   esimCancelledAt?: string;
   esimCancelResponse?: Record<string, unknown>;
+  /** When an asynchronous provider cancel was accepted (ESIM_CANCEL_PENDING). */
+  esimCancelRequestedAt?: string;
+  /** The provider's later EsimCancelResult event, for asynchronous cancels. */
+  esimCancelResult?: Record<string, unknown>;
   gatewayResponse?: Record<string, unknown>;
   refundedAt?: string;
   /** Set when CS returned the money outside Midtrans (e.g. a bank transfer order). */
@@ -58,14 +62,19 @@ export type RefundEvent = {
 
 /**
  * PENDING_REVIEW -> APPROVED -> ESIM_CANCELLED -> REFUNDED is the happy path.
- * APPROVED and ESIM_CANCELLED are transient: they only stay put when the
- * process stopped mid-way, which the admin sees as "Diproses".
+ * Providers whose cancel is asynchronous (Montnets) go
+ * APPROVED -> ESIM_CANCEL_PENDING, and the provider's result arrives later as
+ * an EsimCancelResult event (see onEsimCancelResult) that moves the refund on
+ * to ESIM_CANCELLED (then Midtrans) or ESIM_CANCEL_FAILED.
+ * APPROVED, ESIM_CANCEL_PENDING and ESIM_CANCELLED are transient: they only
+ * stay put when the process stopped mid-way, which the admin sees as "Diproses".
  * ESIM_CANCEL_FAILED and REFUND_FAILED are "Perlu tindakan": CS retries, or
  * for REFUND_FAILED returns the money by hand and marks it done.
  */
 export const REFUND_STATUSES = [
   'PENDING_REVIEW',
   'APPROVED',
+  'ESIM_CANCEL_PENDING',
   'ESIM_CANCEL_FAILED',
   'ESIM_CANCELLED',
   'REFUND_FAILED',
@@ -81,6 +90,7 @@ export const isRefundStatus = (value: unknown): value is RefundStatus =>
 export const OPEN_REFUND_STATUSES: readonly RefundStatus[] = [
   'PENDING_REVIEW',
   'APPROVED',
+  'ESIM_CANCEL_PENDING',
   'ESIM_CANCEL_FAILED',
   'ESIM_CANCELLED',
   'REFUND_FAILED',
