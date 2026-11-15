@@ -3,7 +3,9 @@ import { randomUUID } from 'crypto';
 
 import {
   createRefundForOrder,
+  findProductByProductCode,
   getOrderById,
+  getRegionByCode,
   getRefundById,
   getSimBySimId,
   queryRefundsByStatus,
@@ -303,6 +305,75 @@ export const createRefundRequest = async (input: {
 
 // ---------------------------------------------------------------------------
 // Admin side
+
+/**
+ * What CS needs about the purchase behind a refund: the product (region, data,
+ * validity), when it was bought, its status and what was actually paid.
+ */
+export type RefundOrderSummary = {
+  orderId: string;
+  orderType?: string;
+  status?: string;
+  createdAt?: string;
+  productCode?: string;
+  regionCode?: string;
+  regionName?: string;
+  gb?: string;
+  validity?: string;
+  price?: number;
+  originalPrice?: number;
+  priceCut?: number;
+  promoCode?: string;
+  quantity?: number;
+  groupIndex?: number;
+  partnerId?: string;
+  customerName?: string;
+  customerPhone?: string;
+};
+
+const num = (value: unknown): number | undefined => {
+  const n = typeof value === 'string' ? Number(value) : value;
+  return typeof n === 'number' && Number.isFinite(n) ? n : undefined;
+};
+
+const compact = <T extends Record<string, unknown>>(value: T): T =>
+  Object.fromEntries(
+    Object.entries(value).filter(([, v]) => v !== undefined && v !== ''),
+  ) as T;
+
+export const getRefundOrderSummary = async (orderId: string): Promise<RefundOrderSummary | null> => {
+  const order = orderId ? (await getOrderById(orderId)).Item : undefined;
+
+  if (!order) {
+    return null;
+  }
+
+  const productCode = str(order.productCode);
+  const product = productCode ? (await findProductByProductCode(productCode)).Items?.[0] : undefined;
+  const regionCode = str(product?.regionCode);
+  const region = regionCode ? (await getRegionByCode(regionCode)).Item : undefined;
+
+  return compact({
+    orderId,
+    orderType: str(order.orderType),
+    status: str(order.status),
+    createdAt: str(order.createdAt),
+    productCode,
+    regionCode,
+    regionName: str(region?.name),
+    gb: product?.gb === undefined ? undefined : String(product.gb),
+    validity: product?.validity === undefined ? undefined : String(product.validity),
+    price: num(order.price),
+    originalPrice: num(order.originalPrice),
+    priceCut: num(order.priceCut),
+    promoCode: str(order.promoCode),
+    quantity: num(order.quantity),
+    groupIndex: num(order.groupIndex),
+    partnerId: str(order.partnerId),
+    customerName: str(order.customerName),
+    customerPhone: str(order.customerPhone),
+  });
+};
 
 export const listRefunds = async (
   statuses: readonly RefundStatus[],

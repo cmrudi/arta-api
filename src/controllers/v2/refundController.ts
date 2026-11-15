@@ -7,6 +7,7 @@ import {
   approveRefund,
   completeRefundManually,
   createRefundRequest,
+  getRefundOrderSummary,
   getSimRefundState,
   listRefunds,
   rejectRefund,
@@ -131,7 +132,13 @@ export const getAdminRefund = async (req: Request, res: Response): Promise<Respo
       return fail(res, { reason: 'REFUND_NOT_FOUND' });
     }
 
-    return res.status(200).json({ success: true, refund });
+    // Order details are a convenience for CS: never fail the refund over them.
+    const order = await getRefundOrderSummary(String(refund.orderId || '')).catch((error) => {
+      console.error('[refund] order summary failed', { refundId: refund.refundId, error });
+      return null;
+    });
+
+    return res.status(200).json({ success: true, refund, order });
   } catch (error) {
     return serverError(res, 'failed to read refund', error);
   }
