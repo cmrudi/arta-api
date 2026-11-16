@@ -140,7 +140,7 @@ the token's email, never one named in the request):
 
 Finance routes (arta-admin token with the `finance` role):
 
-- `GET /v2/admin/partners` - every partner
+- `GET /v2/admin/partners` - every partner (also allowed with the `customer` role, read-only)
 - `GET /v2/admin/partners/:partnerId`
 - `PATCH /v2/admin/partners/:partnerId` - `{ "email": "new@example.com", "key": "budi-baru", "name": "Budi" }` (any of them). A new key credits sales from then on; the old one moves to `previousKeys` and stops crediting new sales. 409 `EMAIL_TAKEN` / `KEY_TAKEN`.
 
