@@ -63,3 +63,9 @@ export const normalizePartnerEmail = (value: unknown): string =>
 export const PARTNER_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const MAX_PARTNER_NAME_LENGTH = 100;
+
+/**
+ * Auth0 roles that may list partner accounts from arta-admin: finance, and
+ * customer service ("customer") read-only. Changing a partner stays finance-only.
+ */
+export const PARTNER_LIST_ROLES = ['finance', 'customer'] as const;

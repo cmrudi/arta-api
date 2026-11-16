@@ -11,7 +11,8 @@ import {
 } from '../../controllers/v2/partnerController';
 import { requireAuth0Bearer } from '../../middlewares/auth0BearerAuth';
 import { requireAuth0EndUser } from '../../middlewares/auth0EndUserAuth';
-import { requireAuth0Role } from '../../middlewares/auth0RoleAuth';
+import { requireAnyAuth0Role, requireAuth0Role } from '../../middlewares/auth0RoleAuth';
+import { PARTNER_LIST_ROLES } from '../../models/partner';
 import { PARTNER_PAYOUT_ROLE } from '../../models/partnerPayout';
 
 const partnerRouter = Router();
@@ -28,8 +29,10 @@ partnerRouter.get('/partner/me/orders', requireAuth0EndUser, getMyPartnerOrders)
 // Finance (same role as payouts): look partners up; change a login email, key
 // or name. The partnerId never changes.
 const requireFinance = [requireAuth0Bearer, requireAuth0Role(PARTNER_PAYOUT_ROLE)];
+// Customer service may also read the partner list (read-only).
+const requirePartnerListReader = [requireAuth0Bearer, requireAnyAuth0Role(PARTNER_LIST_ROLES)];
 
-partnerRouter.get('/admin/partners', requireFinance, getAdminPartners);
+partnerRouter.get('/admin/partners', requirePartnerListReader, getAdminPartners);
 partnerRouter.get('/admin/partners/:partnerId', requireFinance, getAdminPartner);
 partnerRouter.patch('/admin/partners/:partnerId', requireFinance, patchAdminPartner);
 
