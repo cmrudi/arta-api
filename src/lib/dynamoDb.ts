@@ -321,6 +321,20 @@ export const querySimReviews = async (
     }),
   );
 
+/** One page of the whole SimReview table, for the admin review list. */
+export const scanSimReviewsPaginated = async (
+  lastEvaluatedKey?: Record<string, unknown>,
+): Promise<{
+  Items?: Record<string, unknown>[];
+  LastEvaluatedKey?: Record<string, unknown>;
+}> =>
+  sendDynamoCommand(
+    new ScanCommand({
+      TableName: SIM_REVIEW_TABLE_NAME,
+      ExclusiveStartKey: lastEvaluatedKey,
+    }),
+  );
+
 export const putSimReview = async (
   review: Record<string, unknown>,
 ): Promise<Record<string, unknown>> =>

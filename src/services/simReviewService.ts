@@ -1,4 +1,10 @@
-import { getSimBySimId, getSimReview, putSimReview, querySimReviews } from '../lib/dynamoDb';
+import {
+  getSimBySimId,
+  getSimReview,
+  putSimReview,
+  querySimReviews,
+  scanSimReviewsPaginated,
+} from '../lib/dynamoDb';
 import {
   MAX_COMMENT_LENGTH,
   MAX_RATING,
@@ -120,4 +126,26 @@ export const findSimReviews = async (
   }
 
   return out;
+};
+
+/**
+ * Every review ever left, newest first, for the admin Customer Reviews page.
+ *
+ * A full scan: the table is small (one row per SIM per kind) and the page
+ * filters client-side. Older rows stored rating as a string, so it is
+ * normalised to a number here.
+ */
+export const listAllSimReviews = async (): Promise<SimReviewItem[]> => {
+  const items: Record<string, unknown>[] = [];
+  let lastEvaluatedKey: Record<string, unknown> | undefined;
+
+  do {
+    const page = await scanSimReviewsPaginated(lastEvaluatedKey);
+    items.push(...(page.Items || []));
+    lastEvaluatedKey = page.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+
+  return items
+    .map((raw) => ({ ...(raw as SimReviewItem), rating: Number(raw.rating) }))
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 };
