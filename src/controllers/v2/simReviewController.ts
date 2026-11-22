@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 
 import { REVIEW_KINDS, isReviewKind, reasonsFor } from '../../models/simReview';
-import { findSimReviews, submitSimReview } from '../../services/simReviewService';
+import { findSimReviews, listAllSimReviews, submitSimReview } from '../../services/simReviewService';
 
 export const postSimReview = async (
   req: Request,
@@ -110,6 +110,25 @@ export const getSimReviews = async (
     return res.status(500).json({
       success: false,
       message: 'failed to read reviews',
+    });
+  }
+};
+
+/** Admin: every customer review, newest first. */
+export const getAdminReviews = async (
+  _req: Request,
+  res: Response,
+): Promise<Response> => {
+  try {
+    const items = await listAllSimReviews();
+
+    return res.status(200).json({ success: true, count: items.length, items });
+  } catch (error) {
+    console.error('Failed to list SIM reviews', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'failed to list reviews',
     });
   }
 };
