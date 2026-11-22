@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 
-import { findProductMappings } from '../../services/productMappingService';
+import { findProductMappings, listAdminProducts } from '../../services/productMappingService';
 import { updateSupplierCostsFromProviders } from '../../services/supplierCostService';
 
 export const getProductMappings = async (req: Request, res: Response): Promise<Response> => {
@@ -37,6 +37,21 @@ export const updateSupplierCosts = async (_req: Request, res: Response): Promise
       success: false,
       message: 'failed to update supplier costs',
       error: error instanceof Error ? error.message : 'unknown error',
+    });
+  }
+};
+/** Finance: every product with provider, supplier IDs and supplier cost. */
+export const getAdminProducts = async (_req: Request, res: Response): Promise<Response> => {
+  try {
+    const items = await listAdminProducts();
+
+    return res.status(200).json({ success: true, count: items.length, items });
+  } catch (error) {
+    console.error('Failed to list admin products', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'failed to list products',
     });
   }
 };
