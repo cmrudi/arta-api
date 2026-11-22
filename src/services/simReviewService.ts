@@ -13,6 +13,7 @@ import {
   SimReviewItem,
   isValidReason,
 } from '../models/simReview';
+import { sendLowReviewAlert, shouldAlertLowReview } from './reviewAlertService';
 
 export type SubmitReviewInput = {
   simId: string;
@@ -109,6 +110,20 @@ export const submitSimReview = async (
   );
 
   await putSimReview(item);
+
+  // Tell ops about unhappy customers (1-2 stars). Best-effort: a failed email
+  // must never lose the customer's review.
+  if (shouldAlertLowReview(rating, existing.Item?.rating)) {
+    try {
+      await sendLowReviewAlert(review);
+    } catch (error) {
+      console.error('[reviewAlert] failed to send low review alert', {
+        simId: input.simId,
+        kind: input.kind,
+        error: error instanceof Error ? error.message : error,
+      });
+    }
+  }
 
   return { success: true, review, action: existing.Item ? 'updated' : 'created' };
 };

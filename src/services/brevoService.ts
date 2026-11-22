@@ -92,3 +92,43 @@ export const sendBrevoTemplateEmail = async (params: {
     throw new Error(`Brevo API failed (status ${response.status}): ${body.slice(0, 200)}`);
   }
 };
+
+/** Sender for internal alerts built in code (no Brevo template). */
+const ARTA_SENDER = { email: 'contact@artamobile.id', name: 'Arta Mobile' };
+
+/** Sends one email with inline HTML (no Brevo template), from contact@artamobile.id. */
+export const sendBrevoHtmlEmail = async (params: {
+  to: string;
+  subject: string;
+  htmlContent: string;
+  replyTo?: string;
+  tags?: string[];
+}): Promise<void> => {
+  const apiKey = process.env.BREVO_API_KEY;
+
+  if (!apiKey) {
+    throw new Error('BREVO_API_KEY is not configured');
+  }
+
+  const response = await fetch(BREVO_SEND_EMAIL_URL, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'api-key': apiKey,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      sender: ARTA_SENDER,
+      to: [{ email: params.to }],
+      subject: params.subject,
+      htmlContent: params.htmlContent,
+      ...(params.replyTo ? { replyTo: { email: params.replyTo } } : {}),
+      ...(params.tags ? { tags: params.tags } : {}),
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Brevo API failed (status ${response.status}): ${body.slice(0, 200)}`);
+  }
+};
