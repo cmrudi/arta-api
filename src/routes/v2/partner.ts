@@ -32,11 +32,11 @@ partnerRouter.patch('/partner/me/key', requireAuth0EndUser, patchMyPartnerKey);
 // Finance (same role as payouts): look partners up; change a login email, key
 // or name. The partnerId never changes.
 const requireFinance = [requireAuth0Bearer, requireAuth0Role(PARTNER_PAYOUT_ROLE)];
-// Customer service may also read the partner list (read-only).
+// Customer service may also read the partner list and add new partners.
 const requirePartnerListReader = [requireAuth0Bearer, requireAnyAuth0Role(PARTNER_LIST_ROLES)];
 
 partnerRouter.get('/admin/partners', requirePartnerListReader, getAdminPartners);
-partnerRouter.post('/admin/partners', requireFinance, postAdminPartner);
+partnerRouter.post('/admin/partners', requirePartnerListReader, postAdminPartner);
 partnerRouter.get('/admin/partners/:partnerId', requireFinance, getAdminPartner);
 partnerRouter.patch('/admin/partners/:partnerId', requireFinance, patchAdminPartner);
 
