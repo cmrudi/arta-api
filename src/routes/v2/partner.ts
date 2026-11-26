@@ -5,6 +5,7 @@ import {
   getAdminPartners,
   getMyPartner,
   getMyPartnerOrders,
+  patchMyPartnerKey,
   getPartnerKeyExists,
   patchAdminPartner,
   postRegisterPartner,
@@ -25,6 +26,7 @@ partnerRouter.get('/partner/keys/:key/exists', getPartnerKeyExists);
 partnerRouter.post('/partner/register', requireAuth0EndUser, postRegisterPartner);
 partnerRouter.get('/partner/me', requireAuth0EndUser, getMyPartner);
 partnerRouter.get('/partner/me/orders', requireAuth0EndUser, getMyPartnerOrders);
+partnerRouter.patch('/partner/me/key', requireAuth0EndUser, patchMyPartnerKey);
 
 // Finance (same role as payouts): look partners up; change a login email, key
 // or name. The partnerId never changes.
