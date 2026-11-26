@@ -3,6 +3,7 @@ import { Router } from 'express';
 import {
   getAdminPartner,
   getAdminPartners,
+  postAdminPartner,
   getMyPartner,
   getMyPartnerOrders,
   getPartnerKeyExists,
@@ -33,6 +34,7 @@ const requireFinance = [requireAuth0Bearer, requireAuth0Role(PARTNER_PAYOUT_ROLE
 const requirePartnerListReader = [requireAuth0Bearer, requireAnyAuth0Role(PARTNER_LIST_ROLES)];
 
 partnerRouter.get('/admin/partners', requirePartnerListReader, getAdminPartners);
+partnerRouter.post('/admin/partners', requireFinance, postAdminPartner);
 partnerRouter.get('/admin/partners/:partnerId', requireFinance, getAdminPartner);
 partnerRouter.patch('/admin/partners/:partnerId', requireFinance, patchAdminPartner);
 

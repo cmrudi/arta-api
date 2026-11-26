@@ -447,3 +447,28 @@ export const updatePartner = async (params: {
 
   return getPartnerDetail(current.partnerId);
 };
+
+/**
+ * Finance adds a partner by hand: a new account for this login email with this
+ * key (and an optional display name). Same uniqueness rules as a partner's own
+ * sign-up; the partner then logs into the portal with that email.
+ */
+export const createPartnerByAdmin = async (params: {
+  email: unknown;
+  key: unknown;
+  name?: unknown;
+}): Promise<PartnerDetailResult> => {
+  const name = params.name === undefined || params.name === null ? '' : str(params.name);
+
+  if (name.length > MAX_PARTNER_NAME_LENGTH) {
+    return fail('INVALID_NAME', `name must be 1-${MAX_PARTNER_NAME_LENGTH} characters`);
+  }
+
+  const registered = await registerPartner({ email: str(params.email), key: params.key });
+
+  if (!registered.success) {
+    return registered;
+  }
+
+  return name ? updatePartner({ partnerId: registered.partnerId, name }) : getPartnerDetail(registered.partnerId);
+};

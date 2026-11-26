@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { AuthenticatedLocals, getAuth0Email } from '../../middlewares/auth0BearerAuth';
 import {
   PartnerFailure,
+  createPartnerByAdmin,
   findPartnerByEmail,
   getPartnerDetail,
   getPartnerOrders,
@@ -132,5 +133,18 @@ export const patchAdminPartner = async (req: Request, res: Response): Promise<Re
     return result.success ? res.status(200).json(result) : fail(res, result);
   } catch (error) {
     return serverError(res, 'failed to update partner', error);
+  }
+};
+
+/** Finance adds a partner by hand (email, key, optional name). */
+export const postAdminPartner = async (req: Request, res: Response): Promise<Response> => {
+  const input = body(req);
+
+  try {
+    const result = await createPartnerByAdmin({ email: input.email, key: input.key, name: input.name });
+
+    return result.success ? res.status(201).json(result) : fail(res, result);
+  } catch (error) {
+    return serverError(res, 'failed to create partner', error);
   }
 };
