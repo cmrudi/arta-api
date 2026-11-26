@@ -472,3 +472,19 @@ export const createPartnerByAdmin = async (params: {
 
   return name ? updatePartner({ partnerId: registered.partnerId, name }) : getPartnerDetail(registered.partnerId);
 };
+
+/**
+ * Partner portal: the logged-in partner picks a new affiliate key. Same rules
+ * as a finance change: the new key must be free, it credits sales from now on,
+ * and the old key goes to previousKeys, stops crediting and is free for others.
+ * The account is the one for the token's email, never one from the request.
+ */
+export const changeMyPartnerKey = async (params: { email: string; key: unknown }): Promise<PartnerDetailResult> => {
+  const account = await findPartnerByEmail(params.email);
+
+  if (!account) {
+    return fail('PARTNER_NOT_FOUND', 'Partner not found');
+  }
+
+  return updatePartner({ partnerId: account.partnerId, key: params.key });
+};

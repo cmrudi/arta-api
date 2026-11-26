@@ -4,6 +4,7 @@ import { AuthenticatedLocals, getAuth0Email } from '../../middlewares/auth0Beare
 import {
   PartnerFailure,
   createPartnerByAdmin,
+  changeMyPartnerKey,
   findPartnerByEmail,
   getPartnerDetail,
   getPartnerOrders,
@@ -80,6 +81,20 @@ export const getMyPartner = async (
     return res.status(200).json({ success: true, partner: account });
   } catch (error) {
     return serverError(res, 'failed to read partner', error);
+  }
+};
+
+/** The partner changes their own affiliate key (go.artamobile.id/<key>). */
+export const patchMyPartnerKey = async (
+  req: Request,
+  res: Response<unknown, AuthenticatedLocals>,
+): Promise<Response> => {
+  try {
+    const result = await changeMyPartnerKey({ email: emailOf(res), key: body(req).key });
+
+    return result.success ? res.status(200).json(result) : fail(res, result);
+  } catch (error) {
+    return serverError(res, 'failed to change partner key', error);
   }
 };
 
