@@ -9,6 +9,7 @@ import {
   patchMyPartnerKey,
   getPartnerKeyExists,
   patchAdminPartner,
+  patchAdminPartnerType,
   postRegisterPartner,
 } from '../../controllers/v2/partnerController';
 import { requireAuth0Bearer } from '../../middlewares/auth0BearerAuth';
@@ -39,5 +40,6 @@ partnerRouter.get('/admin/partners', requirePartnerListReader, getAdminPartners)
 partnerRouter.post('/admin/partners', requirePartnerListReader, postAdminPartner);
 partnerRouter.get('/admin/partners/:partnerId', requireFinance, getAdminPartner);
 partnerRouter.patch('/admin/partners/:partnerId', requireFinance, patchAdminPartner);
+partnerRouter.patch('/admin/partners/:partnerId/type', requirePartnerListReader, patchAdminPartnerType);
 
 export default partnerRouter;

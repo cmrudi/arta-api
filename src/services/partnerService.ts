@@ -7,10 +7,13 @@ import {
   queryPublishedEsimOrdersByPartnerId,
   scanPartnerAccounts,
   setPartnerAccountEmail,
+  updatePartnerAccountType,
   setPartnerAccountKey,
   updatePartnerAccountName,
 } from '../lib/dynamoDb';
 import {
+  DEFAULT_PARTNER_TYPE,
+  PARTNER_TYPES,
   MAX_PARTNER_NAME_LENGTH,
   PARTNER_EMAIL_PATTERN,
   PARTNER_ID_PREFIX,
@@ -48,6 +51,7 @@ export type PartnerFailureReason =
   | 'EMAIL_TAKEN'
   | 'ALREADY_REGISTERED'
   | 'INVALID_NAME'
+  | 'INVALID_PARTNER_TYPE'
   | 'INVALID_PARTNER_ID'
   | 'PARTNER_NOT_FOUND'
   | 'CONFLICT';
@@ -64,6 +68,12 @@ const fail = (reason: PartnerFailureReason, message: string, extra: Record<strin
   ...extra,
 });
 
+// Accounts created before partnerType existed have none: treat them as the default type.
+const toPartnerType = (value: unknown): number => {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_PARTNER_TYPE;
+};
+
 const toAccount = (item: Record<string, unknown>): PartnerAccount => ({
   partnerId: str(item.partnerId),
   email: str(item.email),
@@ -72,6 +82,7 @@ const toAccount = (item: Record<string, unknown>): PartnerAccount => ({
     ? { previousKeys: item.previousKeys.map((value) => str(value)).filter(Boolean) }
     : {}),
   ...(str(item.name) ? { name: str(item.name) } : {}),
+  partnerType: toPartnerType(item.partnerType),
   createdAt: str(item.createdAt),
   updatedAt: str(item.updatedAt),
 });
@@ -171,7 +182,14 @@ export const registerPartner = async (params: { email: string; key: unknown }): 
     const candidate = newPartnerId();
 
     try {
-      await createPartnerAccount({ partnerId: candidate, email, key, createdAt: now, updatedAt: now });
+      await createPartnerAccount({
+        partnerId: candidate,
+        email,
+        key,
+        partnerType: DEFAULT_PARTNER_TYPE,
+        createdAt: now,
+        updatedAt: now,
+      });
       partnerId = candidate;
     } catch (error) {
       if (!isConditionFailure(error)) {
@@ -487,4 +505,28 @@ export const changeMyPartnerKey = async (params: { email: string; key: unknown }
   }
 
   return updatePartner({ partnerId: account.partnerId, key: params.key });
+};
+
+/**
+ * Finance or customer service changes a partner's type (commission tier). Only
+ * the type changes; email, key and history stay as they are.
+ */
+export const setPartnerType = async (params: { partnerId: string; partnerType: unknown }): Promise<PartnerDetailResult> => {
+  const loaded = await getPartnerDetail(params.partnerId);
+
+  if (!loaded.success) {
+    return loaded;
+  }
+
+  const partnerType = typeof params.partnerType === 'number' ? params.partnerType : Number.NaN;
+
+  if (!PARTNER_TYPES.includes(partnerType)) {
+    return fail('INVALID_PARTNER_TYPE', `partnerType must be one of ${PARTNER_TYPES.join(', ')}`);
+  }
+
+  if (partnerType !== loaded.partner.partnerType) {
+    await updatePartnerAccountType({ partnerId: loaded.partner.partnerId, partnerType, now: new Date().toISOString() });
+  }
+
+  return getPartnerDetail(loaded.partner.partnerId);
 };
