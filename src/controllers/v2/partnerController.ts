@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { AuthenticatedLocals, getAuth0Email } from '../../middlewares/auth0BearerAuth';
 import {
   PartnerFailure,
+  setPartnerType,
   createPartnerByAdmin,
   changeMyPartnerKey,
   findPartnerByEmail,
@@ -161,5 +162,16 @@ export const postAdminPartner = async (req: Request, res: Response): Promise<Res
     return result.success ? res.status(201).json(result) : fail(res, result);
   } catch (error) {
     return serverError(res, 'failed to create partner', error);
+  }
+};
+
+/** Finance or customer service changes a partner's type ({ partnerType: number }). */
+export const patchAdminPartnerType = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const result = await setPartnerType({ partnerId: param(req, 'partnerId'), partnerType: body(req).partnerType });
+
+    return result.success ? res.status(200).json(result) : fail(res, result);
+  } catch (error) {
+    return serverError(res, 'failed to change partner type', error);
   }
 };

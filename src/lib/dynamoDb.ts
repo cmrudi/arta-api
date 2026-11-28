@@ -1196,6 +1196,7 @@ export const createPartnerAccount = async (account: {
   email: string;
   key: string;
   name?: string;
+  partnerType: number;
   createdAt: string;
   updatedAt: string;
 }): Promise<void> => {
@@ -1290,6 +1291,23 @@ export const updatePartnerAccountName = async (params: {
       ConditionExpression: 'attribute_exists(partnerId)',
       ExpressionAttributeNames: { '#name': 'name', '#updatedAt': 'updatedAt' },
       ExpressionAttributeValues: { ':name': params.name, ':now': params.now },
+    }),
+  );
+};
+
+export const updatePartnerAccountType = async (params: {
+  partnerId: string;
+  partnerType: number;
+  now: string;
+}): Promise<void> => {
+  await sendDynamoCommand(
+    new UpdateCommand({
+      TableName: PARTNER_ACCOUNT_TABLE_NAME,
+      Key: { partnerId: params.partnerId },
+      UpdateExpression: 'SET #partnerType = :type, #updatedAt = :now',
+      ConditionExpression: 'attribute_exists(partnerId)',
+      ExpressionAttributeNames: { '#partnerType': 'partnerType', '#updatedAt': 'updatedAt' },
+      ExpressionAttributeValues: { ':type': params.partnerType, ':now': params.now },
     }),
   );
 };

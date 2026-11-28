@@ -30,9 +30,17 @@ export type PartnerAccount = {
   key: string;
   previousKeys?: string[];
   name?: string;
+  /** Commission tier: picks the PartnerCommission rows (partnerType) for this partner. */
+  partnerType: number;
   createdAt: string;
   updatedAt: string;
 };
+
+/** Every partner starts on type 0 (the standard commission table). */
+export const DEFAULT_PARTNER_TYPE = 0;
+
+/** Partner types that exist (labels live in arta-admin: 0 Umum, 1 Travel Umrah). */
+export const PARTNER_TYPES: readonly number[] = [0, 1];
 
 export const PARTNER_ID_PREFIX = 'PTN-';
 
